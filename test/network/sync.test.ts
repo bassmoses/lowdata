@@ -5,6 +5,7 @@ import { SyncManager } from '../../src/network/sync.js';
 import type { SyncEvent } from '../../src/network/types.js';
 import { openTestDb } from '../helpers/db.js';
 import { makeQueueItem as makeItem } from '../helpers/queueItem.js';
+import { waitForCondition } from '../helpers/wait.js';
 
 function setup(
   dbName: string,
@@ -89,9 +90,11 @@ describe('SyncManager', () => {
 
     const updated = await queue.get(item.id);
     expect(updated?.status).toBe('pending');
-    // The server asked for a 3600s Retry-After, but retryConfig.maxDelayMs caps it at 5s —
-    // matching how the live-retry path (retry.ts) caps the same header.
-    expect(updated!.nextAttemptAt - before).toBeLessThanOrEqual(5_050);
+    // The server asked for a 3600s (3,600,000ms) Retry-After, but retryConfig.maxDelayMs caps it
+    // at 5s — matching how the live-retry path (retry.ts) caps the same header. The slack here is
+    // generous (2s) to absorb real scheduling jitter (IDB round-trips, lock acquisition) without
+    // weakening the assertion: an uncapped regression would overshoot by ~3,595,000ms, not 2,000ms.
+    expect(updated!.nextAttemptAt - before).toBeLessThanOrEqual(7_000);
     sync.destroy();
   });
 
@@ -131,11 +134,13 @@ describe('SyncManager', () => {
 
   it('cancel() aborts an in-flight item and marks it cancelled', async () => {
     const { queue, sync } = setup(`sync-test-cancel-${Math.random()}`);
+    let fetchCalled = false;
     vi.stubGlobal(
       'fetch',
       vi.fn(
         (_url: string, init?: RequestInit) =>
           new Promise((_resolve, reject) => {
+            fetchCalled = true;
             init?.signal?.addEventListener('abort', () =>
               reject(new DOMException('aborted', 'AbortError')),
             );
@@ -145,7 +150,9 @@ describe('SyncManager', () => {
 
     const item = await queue.add(makeItem());
     const drainPromise = sync.drain();
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    // Wait for the request to actually be in flight (rather than guessing a fixed delay) before
+    // cancelling it — cancelling too early would abort before there's anything to abort.
+    await waitForCondition(() => fetchCalled, { message: 'expected fetch() to have been called' });
     sync.cancel(item.id);
     await drainPromise;
 

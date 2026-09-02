@@ -3,6 +3,7 @@ import { createLowdataClient, type LowdataClient } from '../../src/network/clien
 import { isQueued } from '../../src/network/types.js';
 import { setOnline } from '../helpers/dom.js';
 import { resetSharedDb } from '../helpers/db.js';
+import { waitForCondition } from '../helpers/wait.js';
 
 describe('LowdataClient', () => {
   let client: LowdataClient | undefined;
@@ -110,7 +111,9 @@ describe('LowdataClient', () => {
     const unsubscribe = client.onSync((e) => eventTypes.push(e.type));
 
     await client.queue.add({ url: '/api/x', method: 'POST', priority: 'normal', body: '{}' });
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await waitForCondition(() => eventTypes.includes('item-success'), {
+      message: `expected an 'item-success' sync event, got: ${eventTypes.join(', ') || '(none)'}`,
+    });
 
     expect(eventTypes).toContain('item-success');
     unsubscribe();

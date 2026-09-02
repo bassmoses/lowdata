@@ -3,6 +3,7 @@ import { createOfflineForm } from '../../src/forms/offlineForm.js';
 import { createLowdataClient, type LowdataClient } from '../../src/network/client.js';
 import { setOnline } from '../helpers/dom.js';
 import { resetSharedDb } from '../helpers/db.js';
+import { waitForCondition } from '../helpers/wait.js';
 
 describe('createOfflineForm', () => {
   let client: LowdataClient | undefined;
@@ -33,8 +34,9 @@ describe('createOfflineForm', () => {
       endpoint: '/api/patients',
       client,
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(form2.getStatus()).toBe('saved');
+    await waitForCondition(() => form2.getStatus() === 'saved', {
+      message: `expected recovered draft status 'saved', got '${form2.getStatus()}'`,
+    });
   });
 
   it('submit() resolves "success" immediately when online and the endpoint responds ok', async () => {
@@ -94,9 +96,9 @@ describe('createOfflineForm', () => {
     setOnline(true);
     window.dispatchEvent(new Event('online'));
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
-    expect(form.getStatus()).toBe('success');
+    await waitForCondition(() => form.getStatus() === 'success', {
+      message: `expected form to reach 'success', last status was '${form.getStatus()}'`,
+    });
     expect(statuses).toContain('syncing');
   });
 
@@ -121,9 +123,9 @@ describe('createOfflineForm', () => {
     });
 
     const first = form.submit({ name: 'Amina' }); // S1 — in flight, will resolve late
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitForCondition(() => callCount >= 1, { message: "expected S1's fetch() to be called" });
     const second = form.submit({ name: 'Amina (corrected)' }); // S2 — supersedes S1
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await waitForCondition(() => callCount >= 2, { message: "expected S2's fetch() to be called" });
 
     // Let S1 (now stale) succeed while S2 is still in flight.
     resolvers[1]?.();
@@ -136,8 +138,9 @@ describe('createOfflineForm', () => {
       endpoint: '/api/patients',
       client,
     });
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(recovered.getStatus()).toBe('saved');
+    await waitForCondition(() => recovered.getStatus() === 'saved', {
+      message: `expected recovered draft status 'saved', got '${recovered.getStatus()}'`,
+    });
     recovered.destroy();
 
     resolvers[2]?.();
@@ -160,16 +163,24 @@ describe('createOfflineForm', () => {
     form.subscribe((s) => statuses.push(s));
     form.destroy();
 
+    let synced = false;
+    client.onSync((e) => {
+      if (e.type === 'item-success') synced = true;
+    });
+
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => new Response(null, { status: 200 })),
     );
     setOnline(true);
     window.dispatchEvent(new Event('online'));
-    await new Promise((resolve) => setTimeout(resolve, 50));
 
-    // destroy() unsubscribed before the reconnect-triggered sync — even though the underlying
-    // queued request did sync successfully, the form must not have observed it.
+    // Wait for the underlying queued request to actually sync (confirms this isn't passing merely
+    // because it didn't have time to happen yet), then assert the form — whose subscription was
+    // destroyed — never observed it.
+    await waitForCondition(() => synced, {
+      message: 'expected the queued request to sync in the background',
+    });
     expect(statuses).toEqual([]);
     expect(form.getStatus()).toBe('pending');
   });
