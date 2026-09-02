@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>lowdata e2e fixture</title>
+  </head>
+  <body>
+    <p>lowdata e2e fixture page — driven by Playwright, not meant to be viewed.</p>
+    <script type="module">
+      import { createLowdataClient } from '/dist/index.js';
+
+      // Exposed for Playwright's page.evaluate() calls. A fresh client per page load mirrors a
+      // real browser tab: independent JS state, but the same origin's IndexedDB underneath —
+      // exactly what makes cross-tab lock behavior worth testing for real, not through jsdom.
+      window.__lowdata = {
+        client: createLowdataClient(),
+      };
+    </script>
+  </body>
+</html>

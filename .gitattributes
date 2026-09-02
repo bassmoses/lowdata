@@ -1,0 +1,5 @@
+# Force LF line endings on checkout for everyone, regardless of a contributor's local
+# core.autocrlf setting — the repo's content is LF; this just stops Windows checkouts from
+# silently converting it to CRLF and then having Prettier (which defaults to LF) flag every file
+# as unformatted for no real reason.
+* text=auto eol=lf

@@ -1,5 +1,5 @@
 import type { ConnectionMonitorOptions } from '../core/connection.js';
-import type { RequestPriority, RetryBackoffConfig } from '../core/types.js';
+import type { LowdataErrorHandler, RequestPriority, RetryBackoffConfig } from '../core/types.js';
 
 export type QueueItemStatus = 'pending' | 'sending' | 'failed' | 'done' | 'cancelled';
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -67,4 +67,10 @@ export interface LowdataClientConfig {
    * since queuing a read rarely makes sense.
    */
   shouldQueueOffline?: (input: { url: string; method: HttpMethod }) => boolean;
+  /**
+   * Observe otherwise-silent internal failures (a background sync error, a fallback to an
+   * in-memory queue/draft store) instead of them only producing a single `console.warn`. Useful
+   * for piping into your own logging/monitoring in production.
+   */
+  onError?: LowdataErrorHandler;
 }

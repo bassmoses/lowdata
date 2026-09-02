@@ -19,6 +19,6 @@
     "resolveJsonModule": true,
     "noEmit": true
   },
-  "include": ["src", "test"],
+  "include": ["src", "test", "e2e", "playwright.config.ts"],
   "exclude": ["dist", "node_modules"]
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createDbFallbackAccessor,
   idbClear,
   idbCount,
   idbDelete,
@@ -62,5 +63,78 @@ describe('idb', () => {
     await expect(openDatabase('x', 1, [])).rejects.toThrow();
 
     globalThis.indexedDB = original;
+  });
+});
+
+describe('createDbFallbackAccessor', () => {
+  it('falls back to memory but stays persistent after a transient operation failure', async () => {
+    const db = {} as IDBDatabase; // never actually touched by the run() callbacks below
+    const accessor = createDbFallbackAccessor(async () => db);
+
+    const result = await accessor.run(
+      async () => {
+        throw new Error('transient quota error');
+      },
+      () => 'fallback-value',
+    );
+    expect(result).toBe('fallback-value');
+    expect(accessor.isPersistent()).toBe(true); // not a structural failure — still persistent
+
+    // A later call still tries IndexedDB rather than being permanently disabled.
+    const result2 = await accessor.run(
+      async () => 'from-db',
+      () => 'fallback-value',
+    );
+    expect(result2).toBe('from-db');
+  });
+
+  it('permanently falls back to memory once getDb() itself fails, without retrying it', async () => {
+    let getDbCalls = 0;
+    const accessor = createDbFallbackAccessor(async () => {
+      getDbCalls++;
+      throw new Error('cannot open database');
+    });
+
+    const result = await accessor.run(
+      async () => 'from-db',
+      () => 'fallback-value',
+    );
+    expect(result).toBe('fallback-value');
+    expect(accessor.isPersistent()).toBe(false);
+
+    await accessor.run(
+      async () => 'from-db',
+      () => 'fallback-value',
+    );
+    expect(getDbCalls).toBe(1); // second run() didn't call getDb() again
+  });
+
+  it('reports onError with the right scope for each failure kind', async () => {
+    const openEvents: Array<{ scope: string }> = [];
+    const openAccessor = createDbFallbackAccessor(
+      async () => {
+        throw new Error('open failed');
+      },
+      (_error, context) => openEvents.push(context),
+    );
+    await openAccessor.run(
+      async () => 'x',
+      () => 'fallback',
+    );
+    expect(openEvents).toEqual([{ scope: 'db-open' }]);
+
+    const opEvents: Array<{ scope: string }> = [];
+    const db = {} as IDBDatabase;
+    const opAccessor = createDbFallbackAccessor(
+      async () => db,
+      (_error, context) => opEvents.push(context),
+    );
+    await opAccessor.run(
+      async () => {
+        throw new Error('operation failed');
+      },
+      () => 'fallback',
+    );
+    expect(opEvents).toEqual([{ scope: 'db-operation' }]);
   });
 });

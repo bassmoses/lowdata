@@ -74,4 +74,14 @@ describe('compressImage', () => {
     expect(result.quality).toBeGreaterThan(0);
     expect(result.quality).toBeLessThanOrEqual(1);
   });
+
+  it('requests EXIF-orientation-correct decoding via createImageBitmap', async () => {
+    const createImageBitmapSpy = vi.fn(async () => ({ width: 800, height: 600, close: () => {} }));
+    vi.stubGlobal('createImageBitmap', createImageBitmapSpy);
+    const file = new Blob(['fake'], { type: 'image/jpeg' });
+
+    await compressImage(file);
+
+    expect(createImageBitmapSpy).toHaveBeenCalledWith(file, { imageOrientation: 'from-image' });
+  });
 });

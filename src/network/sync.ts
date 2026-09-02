@@ -1,7 +1,11 @@
 import { computeBackoffDelay } from '../core/backoff.js';
 import { createId } from '../core/id.js';
 import { acquireSyncLock } from '../core/lock.js';
-import { DEFAULT_RETRY_CONFIG, type RetryBackoffConfig } from '../core/types.js';
+import {
+  DEFAULT_RETRY_CONFIG,
+  type LowdataErrorHandler,
+  type RetryBackoffConfig,
+} from '../core/types.js';
 import type { ConnectionMonitor } from '../core/connection.js';
 import { LowdataRequestError } from './errors.js';
 import {
@@ -30,6 +34,7 @@ export interface SyncManagerOptions {
   /** How many queued items to send concurrently. Default 1 — deliberately conservative on 2G. */
   syncConcurrency?: number;
   onEvent?: (event: SyncEvent) => void;
+  onError?: LowdataErrorHandler;
 }
 
 /**
@@ -89,7 +94,10 @@ export class SyncManager {
     // could believe they hold it and send the same item twice.
     this.draining = true;
     try {
-      const db = await this.opts.getDb().catch(() => undefined);
+      const db = await this.opts.getDb().catch((error) => {
+        this.opts.onError?.(error, { scope: 'db-open' });
+        return undefined;
+      });
       const lock = await acquireSyncLock(db, SYNC_LOCK_NAME, this.ownerId);
       if (!lock) return; // another tab is already draining, or no lock could be acquired this cycle
 
@@ -116,8 +124,9 @@ export class SyncManager {
       } finally {
         await lock.release().catch(() => {});
       }
-    } catch {
-      // swallow — see doc comment above
+    } catch (error) {
+      // swallow — see doc comment above — but still make it observable.
+      this.opts.onError?.(error, { scope: 'sync' });
     } finally {
       this.draining = false;
     }

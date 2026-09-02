@@ -6,7 +6,9 @@ Automatic retries with backoff, an offline request queue that survives page relo
 forms, and bandwidth-aware image compression — for web apps that have to keep working on 2G, on a
 flaky café Wi-Fi, or mid-load-shedding. Framework-agnostic, near-zero dependencies, fully typed.
 
-[![license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![CI](https://github.com/bassmoses/lowdata/actions/workflows/ci.yml/badge.svg)](https://github.com/bassmoses/lowdata/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/lowdata.svg)](https://www.npmjs.com/package/lowdata)
+[![license](https://img.shields.io/npm/l/lowdata.svg)](./LICENSE)
 [![bundle size](https://img.shields.io/badge/core%20%2B%20network%20%2B%20forms-~9%20KB%20gzip-brightgreen.svg)](#bundle-size)
 
 ```ts
@@ -138,6 +140,20 @@ client.onSync((event) => {
 });
 ```
 
+Background sync failures are deliberately never thrown (a queued item retrying in the background
+shouldn't crash your app) — but they're not silent either. Pass `onError` to see them (a
+`console.warn` is the default if you don't):
+
+```ts
+createLowdataClient({
+  onError: (error, { scope }) => reportToMonitoring(error, { scope }),
+  // scope: 'db-open' (IndexedDB unavailable, fell back to memory for the session)
+  //      | 'db-operation' (one IndexedDB call failed — e.g. a transient quota error — persistence
+  //        is still available, just that one call fell back)
+  //      | 'sync' (the background sync loop hit an unexpected error)
+});
+```
+
 ### Retry & backoff
 
 ```ts
@@ -228,8 +244,24 @@ cross-tab-raced request is still possible in rare edge cases.
   for that session.
 - **SSR-safe to import**: `createLowdataClient()` and friends never assume `window`/`navigator`
   exist; on the server, connection quality reports `'online'` and nothing touches the DOM.
-- Sync only runs while a tab is open (no Service Worker in v1) — closing the tab while offline
-  defers sync to the next time the app is opened, not true background sync.
+
+## Known limitations & roadmap
+
+- **Sync only runs while a tab is open.** There's no Service Worker in v1 (by design — see
+  "vs. alternatives" below) — closing the tab while offline defers sync to the next time the app
+  is opened, not true background sync.
+- **No live cross-tab queue state.** The cross-tab _lock_ (preventing double-sends) is real and
+  tested against real multiple tabs (see `e2e/`) — but `queue.list()` in tab B doesn't reactively
+  update when tab A's queue changes; you'd need to poll or re-call it.
+- **Storage quota** is enforced via `maxQueueItemSizeBytes` (rejects oversized items explicitly,
+  default 5 MB) rather than proactively checked against `navigator.storage.estimate()` — a
+  same-origin quota that's already nearly full can still surface as an `onError` `'db-operation'`
+  event rather than being caught in advance.
+- **No per-endpoint circuit breaker.** Many queued items to the same persistently-down host each
+  retry independently (with jitter) rather than coordinating — fine at normal scale, untested at
+  very large queue sizes against one failing endpoint.
+
+See [`ROADMAP.md`](./ROADMAP.md) for what's deliberately deferred and why.
 
 ## Bundle size
 
@@ -260,7 +292,8 @@ quality search) is never pulled in by the root import; you opt in explicitly via
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md).
+See [CONTRIBUTING.md](./CONTRIBUTING.md), [VERSIONING.md](./VERSIONING.md) for the (fully
+automated) release process, and [SECURITY.md](./SECURITY.md) to report a vulnerability.
 
 ## License
 

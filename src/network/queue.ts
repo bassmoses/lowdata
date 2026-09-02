@@ -6,6 +6,7 @@ import {
   idbGetAll,
   idbPut,
 } from '../core/idb.js';
+import type { LowdataErrorHandler } from '../core/types.js';
 import type { QueueItem, QueueItemStatus } from './types.js';
 
 const STORE = 'queue';
@@ -25,8 +26,8 @@ export class RequestQueue {
   private memory = new Map<string, QueueItem>();
   private accessor;
 
-  constructor(getDb: () => Promise<IDBDatabase>) {
-    this.accessor = createDbFallbackAccessor(getDb);
+  constructor(getDb: () => Promise<IDBDatabase>, onError?: LowdataErrorHandler) {
+    this.accessor = createDbFallbackAccessor(getDb, onError);
   }
 
   isPersistent(): boolean {

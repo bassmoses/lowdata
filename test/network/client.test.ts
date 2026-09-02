@@ -65,6 +65,11 @@ describe('LowdataClient', () => {
     );
     client = createLowdataClient({
       retry: { maxRetries: 1, baseDelayMs: 1, maxDelayMs: 5, jitter: 'none' },
+      // This test doesn't await the background sync notifyEnqueued() kicks off, so it can still be
+      // mid-flight when afterEach() closes the shared db — a benign, already-covered race
+      // (test/network/sync.test.ts asserts drain() swallows exactly this). Silence the resulting
+      // onError instead of letting it print a console.warn on every run.
+      onError: () => {},
     });
 
     const result = await client.fetch('/api/orders', { method: 'POST', body: '{}' });

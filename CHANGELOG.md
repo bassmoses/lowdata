@@ -1,10 +1,17 @@
 # Changelog
 
-All notable changes to this project are documented in this file.
+All notable changes to this project are documented here. Releases from this point forward are
+fully automated by [semantic-release](https://semantic-release.gitbook.io/) — see
+[`VERSIONING.md`](./VERSIONING.md) — which prepends a new entry above this line every time a
+qualifying commit lands on `master`. Nothing below this line is manually maintained going forward.
 
-## 0.1.0 — Unreleased
+## Pre-automation history
 
-Initial release.
+### 0.1.0
+
+Initial build, establishing the core feature set (not published to npm under automated
+versioning — this repo's first automated release, whatever version semantic-release assigns it,
+is the first one actually on the registry):
 
 - **Network layer**: `createLowdataClient()` — a `fetch()` wrapper with automatic retry
   (exponential backoff + jitter), a persistent IndexedDB-backed offline request queue with

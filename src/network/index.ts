@@ -24,4 +24,6 @@ export type {
   RequestPriority,
   RetryBackoffConfig,
   JitterStrategy,
+  LowdataErrorScope,
+  LowdataErrorHandler,
 } from '../core/types.js';

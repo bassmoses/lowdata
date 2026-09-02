@@ -28,6 +28,8 @@ export type {
   RequestPriority,
   RetryBackoffConfig,
   JitterStrategy,
+  LowdataErrorScope,
+  LowdataErrorHandler,
 } from './network/index.js';
 
 export { createOfflineForm } from './forms/index.js';

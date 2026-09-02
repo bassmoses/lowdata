@@ -2,7 +2,12 @@ import { ConnectionMonitor } from '../core/connection.js';
 import { Emitter } from '../core/events.js';
 import { createId } from '../core/id.js';
 import { getSharedDb } from '../core/idb.js';
-import type { ConnectionInfo, ConnectionListener, Unsubscribe } from '../core/types.js';
+import type {
+  ConnectionInfo,
+  ConnectionListener,
+  LowdataErrorHandler,
+  Unsubscribe,
+} from '../core/types.js';
 import { LowdataRequestError } from './errors.js';
 import { RequestQueue, type QueueListFilter } from './queue.js';
 import { attemptWithRetry } from './retry.js';
@@ -22,6 +27,10 @@ const MUTATING_METHODS = new Set<HttpMethod>(['POST', 'PUT', 'PATCH', 'DELETE'])
 function defaultShouldQueueOffline({ method }: { url: string; method: HttpMethod }): boolean {
   return MUTATING_METHODS.has(method);
 }
+
+const defaultOnError: LowdataErrorHandler = (error, { scope }) => {
+  console.warn(`lowdata: internal error (${scope})`, error);
+};
 
 function normalizeHeaders(headers?: HeadersInit): Record<string, string> | undefined {
   if (!headers) return undefined;
@@ -75,8 +84,9 @@ export class LowdataClient {
   private destroyed = false;
 
   constructor(private config: LowdataClientConfig = {}) {
+    const onError = config.onError ?? defaultOnError;
     this.monitor = new ConnectionMonitor(config.connection);
-    this.requestQueue = new RequestQueue(() => getSharedDb());
+    this.requestQueue = new RequestQueue(() => getSharedDb(), onError);
     this.syncManager = new SyncManager({
       queue: this.requestQueue,
       connection: this.monitor,
@@ -84,6 +94,7 @@ export class LowdataClient {
       retryConfig: config.retry,
       syncConcurrency: config.syncConcurrency,
       onEvent: (event) => this.syncEmitter.emit(event),
+      onError,
     });
 
     this.connection = {

@@ -13,7 +13,11 @@ type ImageSource = ImageBitmap | HTMLImageElement;
 
 async function loadImageSource(file: File | Blob): Promise<ImageSource> {
   if (typeof createImageBitmap === 'function') {
-    return createImageBitmap(file);
+    // `imageOrientation: 'from-image'` is the spec-defined way to force EXIF-orientation-correct
+    // decoding regardless of a given browser's default — without it, a photo taken sideways on a
+    // phone can come out of `drawImage()` still sideways, since canvas pixel data (unlike an
+    // `<img>` element's own on-screen rendering) doesn't reliably apply EXIF orientation itself.
+    return createImageBitmap(file, { imageOrientation: 'from-image' });
   }
   // Fallback for environments without createImageBitmap (older Safari).
   return new Promise<HTMLImageElement>((resolve, reject) => {

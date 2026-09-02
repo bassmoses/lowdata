@@ -195,4 +195,49 @@ describe('SyncManager', () => {
     sync.destroy();
     connection.destroy();
   });
+
+  it('reports onError with scope "db-open" when its own getDb() rejects, without throwing', async () => {
+    const queue = new RequestQueue(openTestDb(`sync-test-dbopen-${Math.random()}`));
+    const connection = new ConnectionMonitor();
+    const errors: Array<{ scope: string }> = [];
+    const sync = new SyncManager({
+      queue,
+      connection,
+      getDb: () => Promise.reject(new Error('cannot open lock db')),
+      onError: (_error, context) => errors.push(context),
+    });
+
+    await queue.add(makeItem());
+
+    await expect(sync.drain()).resolves.toBeUndefined();
+    expect(errors).toContainEqual({ scope: 'db-open' });
+
+    sync.destroy();
+    connection.destroy();
+  });
+
+  it('reports onError with scope "sync" for an unexpected error during drain, without throwing', async () => {
+    const connection = new ConnectionMonitor();
+    const errors: Array<{ scope: string }> = [];
+    // A deliberately broken queue double — `as unknown as RequestQueue` bypasses the structural
+    // check since only `sweepStale` needs to exist for this test to exercise drain()'s outer,
+    // catch-all error path.
+    const brokenQueue = {
+      sweepStale: async () => {
+        throw new Error('boom');
+      },
+    } as unknown as RequestQueue;
+    const sync = new SyncManager({
+      queue: brokenQueue,
+      connection,
+      getDb: openTestDb(`sync-test-syncerror-${Math.random()}`),
+      onError: (_error, context) => errors.push(context),
+    });
+
+    await expect(sync.drain()).resolves.toBeUndefined();
+    expect(errors).toContainEqual({ scope: 'sync' });
+
+    sync.destroy();
+    connection.destroy();
+  });
 });

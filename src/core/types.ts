@@ -48,3 +48,24 @@ export const DEFAULT_RETRY_CONFIG: RetryBackoffConfig = {
   maxDelayMs: 30_000,
   jitter: 'full',
 };
+
+/**
+ * Where an internal, otherwise-silent failure originated:
+ *  - `'db-open'`: IndexedDB itself couldn't be opened (SSR, unsupported/locked-down browser) —
+ *    persistence is now permanently disabled for this session; lowdata falls back to an
+ *    in-memory queue/draft store.
+ *  - `'db-operation'`: a single IndexedDB operation failed (e.g. a transient
+ *    `QuotaExceededError`, a blocked transaction) — persistence is still available; only that
+ *    one call fell back to memory.
+ *  - `'sync'`: the background sync loop hit an error outside of a single queued item's own
+ *    retry accounting (e.g. it couldn't acquire the shared database or the cross-tab lock).
+ */
+export type LowdataErrorScope = 'db-open' | 'db-operation' | 'sync';
+
+/**
+ * Optional escape hatch for otherwise-silent internal failures. lowdata deliberately never lets
+ * these throw — a failed background sync or a degraded-to-memory fallback shouldn't crash the
+ * host app — but a production app still needs a way to *see* it happened (log it, alert on it),
+ * rather than it vanishing into a single `console.warn`.
+ */
+export type LowdataErrorHandler = (error: unknown, context: { scope: LowdataErrorScope }) => void;

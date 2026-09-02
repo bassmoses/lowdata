@@ -2,6 +2,7 @@
  * Minimal promise-based IndexedDB wrapper. Deliberately small and hand-rolled (no `idb`
  * dependency) — lowdata only needs put/get/getAll/delete/clear against a handful of stores.
  */
+import type { LowdataErrorHandler } from './types.js';
 
 export interface IdbIndexSpec {
   name: string;
@@ -177,23 +178,40 @@ export interface DbFallbackAccessor {
 }
 
 /**
- * Shared "try IndexedDB, permanently fall back to an in-memory implementation on first failure"
- * policy, used by both the request queue and form draft storage. The fallback exists so importing
- * lowdata never throws in an environment without IndexedDB (SSR, locked-down browsers) — not to
- * promise durability there. Once a `getDb()` call has failed, every subsequent `run()` goes
- * straight to `fallback()` without retrying — an environment without IndexedDB isn't expected to
- * gain it mid-session.
+ * Shared "try IndexedDB, fall back to an in-memory implementation" policy, used by both the
+ * request queue and form draft storage. The fallback exists so importing lowdata never throws in
+ * an environment without IndexedDB (SSR, locked-down browsers) — not to promise durability there.
+ *
+ * A `getDb()` failure is structural (IndexedDB genuinely isn't available) and permanently flips to
+ * the in-memory fallback for the rest of the session — an environment without IndexedDB isn't
+ * expected to gain it mid-session. A failure from `fn(db)` on an already-open database (a
+ * transient `QuotaExceededError`, a blocked transaction, another tab's version-change) is *not*
+ * treated as "IndexedDB is unavailable" — only that one call falls back to memory; persistence
+ * keeps being attempted on the next call. Conflating the two used to mean one quota hiccup could
+ * silently and permanently disable persistence for an otherwise-healthy session.
  */
-export function createDbFallbackAccessor(getDb: () => Promise<IDBDatabase>): DbFallbackAccessor {
+export function createDbFallbackAccessor(
+  getDb: () => Promise<IDBDatabase>,
+  onError?: LowdataErrorHandler,
+): DbFallbackAccessor {
   let dbAvailable = true;
   return {
     async run<T>(fn: (db: IDBDatabase) => Promise<T>, fallback: () => T): Promise<T> {
       if (!dbAvailable) return fallback();
+
+      let db: IDBDatabase;
       try {
-        const db = await getDb();
-        return await fn(db);
-      } catch {
+        db = await getDb();
+      } catch (error) {
         dbAvailable = false;
+        onError?.(error, { scope: 'db-open' });
+        return fallback();
+      }
+
+      try {
+        return await fn(db);
+      } catch (error) {
+        onError?.(error, { scope: 'db-operation' });
         return fallback();
       }
     },
