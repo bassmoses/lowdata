@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: pnpm
@@ -31,7 +31,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20.x
           cache: pnpm
@@ -54,7 +54,7 @@ jobs:
         with:
           fetch-depth: 0 # semantic-release needs full history + tags
       - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           # semantic-release 25 requires Node ^22.14.0 || >=24.10.0 — independent of the
           # package's own `engines.node: >=18`, which only constrains consumers of lowdata.
