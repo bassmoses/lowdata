@@ -1,6 +1,6 @@
 {
   "name": "lowdata",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Resilience for the other half of the internet: automatic retries, an offline request queue, and bandwidth-aware media for web apps on poor connections.",
   "keywords": [
     "offline",
@@ -16,7 +16,7 @@
     "pwa"
   ],
   "license": "MIT",
-  "author": "",
+  "author": "Moses Bass <bassmoses996@gmail.com>",
   "homepage": "https://github.com/bassmoses/lowdata#readme",
   "repository": {
     "type": "git",
@@ -30,6 +30,24 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "unpkg": "./dist/lowdata.global.js",
+  "jsdelivr": "./dist/lowdata.global.js",
+  "typesVersions": {
+    "*": {
+      "network": [
+        "./dist/network.d.ts"
+      ],
+      "forms": [
+        "./dist/forms.d.ts"
+      ],
+      "media": [
+        "./dist/media.d.ts"
+      ],
+      "react": [
+        "./dist/react.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -64,7 +82,7 @@
   "engines": {
     "node": ">=18"
   },
-  "packageManager": "pnpm@11.9.0",
+  "packageManager": "pnpm@10.34.5+sha512.a4ee05f2f73658255bd6a89859c065a45c28a57daefae2c893a168ee2b73168c37b91e83e57ea67654ad03f03031746430e8bce38e362e042605fb8abc80192e",
   "publishConfig": {
     "access": "public"
   },
@@ -77,6 +95,7 @@
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepublishOnly": "pnpm typecheck && pnpm build && pnpm test",
