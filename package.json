@@ -1,6 +1,6 @@
 {
   "name": "lowdata",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Resilience for the other half of the internet: automatic retries, an offline request queue, and bandwidth-aware media for web apps on poor connections.",
   "keywords": [
     "offline",
@@ -16,7 +16,7 @@
     "pwa"
   ],
   "license": "MIT",
-  "author": "",
+  "author": "Moses Bass <bassmoses996@gmail.com>",
   "homepage": "https://github.com/bassmoses/lowdata#readme",
   "repository": {
     "type": "git",
@@ -30,6 +30,16 @@
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "unpkg": "./dist/lowdata.global.js",
+  "jsdelivr": "./dist/lowdata.global.js",
+  "typesVersions": {
+    "*": {
+      "network": ["./dist/network.d.ts"],
+      "forms": ["./dist/forms.d.ts"],
+      "media": ["./dist/media.d.ts"],
+      "react": ["./dist/react.d.ts"]
+    }
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -77,6 +87,7 @@
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepublishOnly": "pnpm typecheck && pnpm build && pnpm test",
