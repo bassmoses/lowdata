@@ -173,7 +173,7 @@ export async function _resetSharedDbForTests(): Promise<void> {
 
 /** Runs an operation against IndexedDB, or an in-memory fallback once IndexedDB has proven unavailable. */
 export interface DbFallbackAccessor {
-  run<T>(fn: (db: IDBDatabase) => Promise<T>, fallback: () => T): Promise<T>;
+  run<T>(fn: (db: IDBDatabase) => Promise<T>, fallback: () => T | Promise<T>): Promise<T>;
   isPersistent(): boolean;
 }
 
@@ -196,7 +196,7 @@ export function createDbFallbackAccessor(
 ): DbFallbackAccessor {
   let dbAvailable = true;
   return {
-    async run<T>(fn: (db: IDBDatabase) => Promise<T>, fallback: () => T): Promise<T> {
+    async run<T>(fn: (db: IDBDatabase) => Promise<T>, fallback: () => T | Promise<T>): Promise<T> {
       if (!dbAvailable) return fallback();
 
       let db: IDBDatabase;

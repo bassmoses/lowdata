@@ -87,7 +87,10 @@ export function createOfflineForm<T = Record<string, unknown>>(
   function ensureSyncSubscription(): void {
     if (unsubscribeSync) return;
     unsubscribeSync = client.onSync((event) => {
-      if (event.type === 'sync-start' || event.type === 'sync-complete') return;
+      // Narrow by the presence of a single `item`, rather than naming every event *without* one —
+      // an inclusion check here doesn't silently stop working the next time a new event variant
+      // (like 'items-blocked', which carries `items` plural, not `item`) is added to SyncEvent.
+      if (!('item' in event)) return;
       const submissionId = event.item.meta?.['submissionId'];
       if (typeof submissionId !== 'string' || submissionId !== activeSubmissionId) return;
 

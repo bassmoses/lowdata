@@ -59,8 +59,14 @@ export const DEFAULT_RETRY_CONFIG: RetryBackoffConfig = {
  *    one call fell back to memory.
  *  - `'sync'`: the background sync loop hit an error outside of a single queued item's own
  *    retry accounting (e.g. it couldn't acquire the shared database or the cross-tab lock).
+ *  - `'quota'`: proactive warning that origin storage is nearly exhausted (per
+ *    `navigator.storage.estimate()`), reported before a write fails rather than only reactively
+ *    via `'db-operation'` once it does.
+ *  - `'decrypt'`: a queued item's `body` could not be decrypted (e.g. a rotated/lost encryption
+ *    key) — that one item is marked `'failed'` so it stops blocking the rest of the queue, but the
+ *    data inside it is unrecoverable and this is the only signal you'll get of that.
  */
-export type LowdataErrorScope = 'db-open' | 'db-operation' | 'sync';
+export type LowdataErrorScope = 'db-open' | 'db-operation' | 'sync' | 'quota' | 'decrypt';
 
 /**
  * Optional escape hatch for otherwise-silent internal failures. lowdata deliberately never lets

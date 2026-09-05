@@ -134,9 +134,14 @@ exponential backoff + jitter, and a cross-tab lock so two open tabs never double
 await client.queue.add({ url: '/api/x', method: 'POST', priority: 'high', body: json });
 await client.queue.list({ status: 'pending' });
 await client.queue.cancel(id);
+await client.queue.retry(id); // move a 'failed'/'expired'/'cancelled' item back to 'pending'
+const unsubscribe = client.queue.subscribe((items) => renderQueueBadge(items.length)); // live in every open tab
 
 client.onSync((event) => {
-  // 'sync-start' | 'item-start' | 'item-success' | 'item-failed' | 'sync-complete'
+  // 'sync-start' | 'item-start' | 'item-success' | 'item-failed' | 'item-expired'
+  //   | 'items-blocked' (withheld by an unresolved dependsOn, or an open circuit breaker — the
+  //     only way to see a stuck item that would otherwise never fire any other event at all)
+  //   | 'circuit-open' | 'sync-complete'
 });
 ```
 
@@ -151,8 +156,80 @@ createLowdataClient({
   //      | 'db-operation' (one IndexedDB call failed — e.g. a transient quota error — persistence
   //        is still available, just that one call fell back)
   //      | 'sync' (the background sync loop hit an unexpected error)
+  //      | 'quota' (proactive warning: origin storage is nearly exhausted)
+  //      | 'decrypt' (a queued item's body couldn't be decrypted — it's marked 'failed' so it
+  //        stops blocking the rest of the queue, but its data is unrecoverable)
 });
 ```
+
+**Ordering dependencies** — don't sync a sale before the product it references has synced:
+
+```ts
+const product = await client.queue.add({ url: '/api/products', method: 'POST', body: productJson });
+await client.queue.add({
+  url: '/api/sales',
+  method: 'POST',
+  body: saleJson,
+  dependsOn: [product.id], // withheld until product.id succeeds (or is cancelled)
+});
+```
+
+**Expiring stale writes** — never replay a request against data that's likely moved on:
+
+```ts
+await client.fetch('/api/checkout', { method: 'POST', body, maxAgeMs: 60_000 }); // 'expired', not sent, after 1 minute queued
+```
+
+**Per-endpoint circuit breaker** — many queued items against one persistently-down host back off
+together instead of each retrying (and failing) independently:
+
+```ts
+createLowdataClient({ circuitBreaker: { threshold: 5, cooldownMs: 30_000 } });
+```
+
+**Encryption at rest** — a queued item's `body` is encrypted before it touches IndexedDB and
+transparently decrypted on read; every other API (`queue.list()`, `onSync`, `QueuedResult`) always
+sees plaintext:
+
+```ts
+createLowdataClient({
+  encryption: {
+    encrypt: (plaintext) => myCrypto.encrypt(plaintext),
+    decrypt: (ciphertext) => myCrypto.decrypt(ciphertext),
+  },
+});
+```
+
+**Namespacing** — isolate one client's queue from another's (e.g. per business/tenant), so
+switching context can't leak or cross-send another context's queued writes:
+
+```ts
+createLowdataClient({ namespace: currentBusinessId });
+```
+
+**Pluggable storage** — swap IndexedDB for SQLite/AsyncStorage/anything else by implementing
+`StorageAdapter` (five methods: `put`/`get`/`getAll`/`delete`/`clear`/`count` + `isPersistent()`),
+useful for an Electron main process or React Native:
+
+```ts
+import { createMemoryStorageAdapter, type StorageAdapter } from 'lowdata';
+
+createLowdataClient({ storage: myCustomAdapter }); // or createMemoryStorageAdapter() for tests/SSR
+```
+
+**Schema migration** — upgrade queue items enqueued by an older build of your app that are still
+pending when the new one runs:
+
+```ts
+createLowdataClient({
+  schemaVersion: 2,
+  migrateQueueItem: (item) => ({ ...item, body: upgradeShape(item.body) }),
+});
+```
+
+**Idempotency** — every mutating request gets an auto-generated `Idempotency-Key` header (and
+`QueueItem.idempotencyKey`) by default, whether it ends up sent live or queued — have your backend
+dedupe on it. Opt out with `autoIdempotencyKey: false`, or supply your own via `idempotencyKey`.
 
 ### Retry & backoff
 
@@ -182,13 +259,13 @@ loader.subscribe(({ src, isLoaded }) => setImgSrc(src));
 
 ## API reference
 
-| Subpath           | Exports                                                                                                                                                  |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lowdata`         | `createLowdataClient`, `LowdataClient`, `isQueued`, `LowdataRequestError`, `createOfflineForm`, `getConnectionQuality`, `onConnectionChange`, core types |
-| `lowdata/network` | Everything in the root, plus `RequestQueue`, `SyncManager`, `ConnectionMonitor`, `defaultRetryOn`                                                        |
-| `lowdata/forms`   | `createOfflineForm`, form types                                                                                                                          |
-| `lowdata/media`   | `compressImage`, `createProgressiveImageLoader`, `presetForQuality`                                                                                      |
-| `lowdata/react`   | `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`, `useProgressiveImage`                                                                       |
+| Subpath           | Exports                                                                                                                                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `lowdata`         | `createLowdataClient`, `LowdataClient`, `isQueued`, `LowdataRequestError`, `createOfflineForm`, `getConnectionQuality`, `onConnectionChange`, `createIndexedDbStorageAdapter`, `createMemoryStorageAdapter`, `CircuitBreaker`, core types |
+| `lowdata/network` | Everything in the root, plus `RequestQueue`, `SyncManager`, `ConnectionMonitor`, `defaultRetryOn`, `defaultBreakerKey`, `createQueueBroadcast`                                                                              |
+| `lowdata/forms`   | `createOfflineForm`, form types                                                                                                                                                                                              |
+| `lowdata/media`   | `compressImage`, `createProgressiveImageLoader`, `presetForQuality`                                                                                                                                                          |
+| `lowdata/react`   | `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`, `useProgressiveImage`                                                                                                                                           |
 
 Full type signatures are in each subpath's shipped `.d.ts` — every export is documented with TSDoc.
 
@@ -213,9 +290,9 @@ await client.queue.cancel(result.id);
 await client.fetch(url, { method: 'POST', body, retry: { maxRetries: 2 } });
 ```
 
-**Server-side idempotency:** every queued/retried request carries an `idempotencyKey` (defaulting
-to the item's id for form submissions) — have your backend dedupe on it, since a retried or
-cross-tab-raced request is still possible in rare edge cases.
+**Server-side idempotency:** every mutating request carries an auto-generated `idempotencyKey`
+(sent as an `Idempotency-Key` header) by default — have your backend dedupe on it, since a retried
+or cross-tab-raced request is still possible in rare edge cases.
 
 ## Framework guides
 
@@ -250,18 +327,13 @@ cross-tab-raced request is still possible in rare edge cases.
 - **Sync only runs while a tab is open.** There's no Service Worker in v1 (by design — see
   "vs. alternatives" below) — closing the tab while offline defers sync to the next time the app
   is opened, not true background sync.
-- **No live cross-tab queue state.** The cross-tab _lock_ (preventing double-sends) is real and
-  tested against real multiple tabs (see `e2e/`) — but `queue.list()` in tab B doesn't reactively
-  update when tab A's queue changes; you'd need to poll or re-call it.
-- **Storage quota** is enforced via `maxQueueItemSizeBytes` (rejects oversized items explicitly,
-  default 5 MB) rather than proactively checked against `navigator.storage.estimate()` — a
-  same-origin quota that's already nearly full can still surface as an `onError` `'db-operation'`
-  event rather than being caught in advance.
-- **No per-endpoint circuit breaker.** Many queued items to the same persistently-down host each
-  retry independently (with jitter) rather than coordinating — fine at normal scale, untested at
-  very large queue sizes against one failing endpoint.
+- **No CRDT/merge conflict resolution.** lowdata detects and reports conflicts (via your backend,
+  e.g. comparing a device's timestamp against the server's) but doesn't attempt to auto-merge
+  divergent writes — pair its idempotency keys with your own server-side conflict policy.
+- **Live cross-tab queue state, storage-quota warnings, and a per-endpoint circuit breaker are all
+  implemented** — see `queue.subscribe()`, the `'quota'` error scope, and `circuitBreaker` above.
 
-See [`ROADMAP.md`](./ROADMAP.md) for what's deliberately deferred and why.
+See [`ROADMAP.md`](./ROADMAP.md) for what's still deliberately deferred and why.
 
 ## Bundle size
 
@@ -271,10 +343,10 @@ import.
 
 | Subpath                                         | gzip (unminified) |
 | ----------------------------------------------- | ----------------- |
-| `lowdata` (core + network + forms)              | ~9.3 KB           |
-| `lowdata/network` alone                         | ~8.1 KB           |
-| `lowdata/media` alone                           | ~2.7 KB           |
-| `lowdata/react` (adds hooks over network+forms) | ~9.8 KB           |
+| `lowdata` (core + network + forms)              | ~12.7 KB          |
+| `lowdata/network` alone                         | ~11.5 KB          |
+| `lowdata/media` alone                           | ~2.6 KB           |
+| `lowdata/react` (adds hooks over network+forms) | ~13.2 KB          |
 
 `lowdata/media`'s image compression (the heaviest single feature — canvas resize + iterative
 quality search) is never pulled in by the root import; you opt in explicitly via `lowdata/media`.

@@ -12,22 +12,6 @@ could pick up queued items even after the tab closes. Deferred because it adds r
 one) for a smaller slice of use cases than the core tab-open case — and lowdata's queue format is
 already usable from a hand-written service worker today if you need this now.
 
-## Live cross-tab queue state
-
-The cross-tab _lock_ (no double-sends) is real today. A `client.queue.subscribe()` that reactively
-updates in every open tab when any tab's queue changes (via `BroadcastChannel` or an IDB
-`storage`-event equivalent) would be a nice addition for apps that show queue/sync status in their
-UI across multiple tabs. Deferred because most apps only need this in the tab that's actually
-submitting.
-
-## Per-endpoint circuit breaker
-
-If an app queues many items against one endpoint that's persistently down, each item currently
-retries independently (with jitter, so they don't perfectly synchronize, but also don't
-coordinate). A shared circuit breaker per-origin/endpoint could back off the whole group together
-after N consecutive failures. Deferred because it's a real scale concern but not a common one —
-most apps won't queue enough concurrent items against one failing host to need it.
-
 ## Vue-specific subpath
 
 The framework-agnostic core already works fine from a small Vue composable (see README → Framework
@@ -35,9 +19,20 @@ guides) — a dedicated `lowdata/vue` subpath with pre-built composables would j
 that thin wrapper yourself. Deferred until there's demand; the value-add over the documented
 composable pattern is small.
 
-## Proactive storage-quota check
+## CRDT / automatic merge conflict resolution
 
-`maxQueueItemSizeBytes` rejects oversized individual items, but doesn't check
-`navigator.storage.estimate()` against the _origin's remaining_ quota before attempting to persist
-— a nearly-full origin quota still surfaces reactively via `onError`'s `'db-operation'` scope
-rather than being caught in advance. Deferred as a smaller, narrower gap than the others here.
+lowdata detects conflicts (comparing timestamps) and reports them, and provides the primitives
+(idempotency keys, `dependsOn` ordering) a backend needs to resolve them deliberately — but it does
+not attempt to automatically merge two divergent writes to the same record. Deferred because a
+general-purpose merge policy is application-specific (last-write-wins is wrong for some fields,
+right for others) — safer to leave the decision to the app/backend than to guess.
+
+---
+
+**Shipped since the list above was written:** live cross-tab queue state (`queue.subscribe()`,
+via `BroadcastChannel`), a per-endpoint circuit breaker (`circuitBreaker` config), and a proactive
+storage-quota check (the `'quota'` error scope) — see the README's "Offline queue & sync" section.
+Also shipped, not originally listed here: a pluggable `StorageAdapter` interface (for non-browser
+hosts like Electron's main process or React Native), per-queue-item encryption at rest, `dependsOn`
+ordering between queued items, `maxAgeMs` expiry, `queue.retry()`, namespaced/isolated queues per
+client, queue schema versioning + migration, and automatic `Idempotency-Key` generation.

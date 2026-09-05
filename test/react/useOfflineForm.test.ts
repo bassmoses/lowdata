@@ -22,7 +22,7 @@ describe('useOfflineForm', () => {
       'fetch',
       vi.fn(async () => new Response(null, { status: 200 })),
     );
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: `use-offline-form-test-${Math.random()}` });
 
     const { result } = renderHook(() =>
       useOfflineForm<{ name: string }>({ id: 'clinic-intake', endpoint: '/api/patients', client }),

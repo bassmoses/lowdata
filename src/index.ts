@@ -11,6 +11,10 @@ export {
   getConnectionQuality,
   onConnectionChange,
   ConnectionMonitor,
+  createIndexedDbStorageAdapter,
+  createMemoryStorageAdapter,
+  CircuitBreaker,
+  defaultBreakerKey,
 } from './network/index.js';
 export type {
   QueueItem,
@@ -30,6 +34,10 @@ export type {
   JitterStrategy,
   LowdataErrorScope,
   LowdataErrorHandler,
+  EncryptionHooks,
+  StorageAdapter,
+  IndexedDbStorageAdapterOptions,
+  CircuitBreakerConfig,
 } from './network/index.js';
 
 export { createOfflineForm } from './forms/index.js';

@@ -5,6 +5,13 @@ import { setOnline } from '../helpers/dom.js';
 import { resetSharedDb } from '../helpers/db.js';
 import { waitForCondition } from '../helpers/wait.js';
 
+// The client's own queue lives in its own namespace per test (see test/network/client.test.ts for
+// why) — independent of `resetSharedDb()`, which resets the *form drafts* store that
+// `createOfflineForm` always shares via lowdata's default database regardless of client namespace.
+function uniqueNamespace(): string {
+  return `offline-form-test-${Math.random()}`;
+}
+
 describe('createOfflineForm', () => {
   let client: LowdataClient | undefined;
 
@@ -20,7 +27,7 @@ describe('createOfflineForm', () => {
   });
 
   it('save() persists a draft that a fresh form instance for the same id recovers', async () => {
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     const form1 = createOfflineForm<{ name: string }>({
       id: 'clinic-intake',
       endpoint: '/api/patients',
@@ -44,7 +51,7 @@ describe('createOfflineForm', () => {
       'fetch',
       vi.fn(async () => new Response(null, { status: 200 })),
     );
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     const form = createOfflineForm<{ name: string }>({
       id: 'clinic-intake',
       endpoint: '/api/patients',
@@ -61,7 +68,7 @@ describe('createOfflineForm', () => {
       'fetch',
       vi.fn(async () => new Response(null, { status: 400 })),
     );
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     const form = createOfflineForm<{ name: string }>({
       id: 'clinic-intake',
       endpoint: '/api/patients',
@@ -73,7 +80,7 @@ describe('createOfflineForm', () => {
   });
 
   it('submit() while offline queues, then auto-syncs to success once back online', async () => {
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     const form = createOfflineForm<{ name: string }>({
       id: 'clinic-intake',
       endpoint: '/api/patients',
@@ -115,7 +122,7 @@ describe('createOfflineForm', () => {
         return new Response(null, { status: 200 });
       }),
     );
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     const form = createOfflineForm<{ name: string }>({
       id: 'clinic-intake',
       endpoint: '/api/patients',
@@ -148,7 +155,7 @@ describe('createOfflineForm', () => {
   });
 
   it('destroy() unsubscribes from sync events, so status stops updating after it', async () => {
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     const form = createOfflineForm<{ name: string }>({
       id: 'clinic-intake',
       endpoint: '/api/patients',
@@ -188,7 +195,7 @@ describe('createOfflineForm', () => {
   it('retry() resubmits the last values', async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     const form = createOfflineForm<{ name: string }>({
       id: 'clinic-intake',
       endpoint: '/api/patients',
@@ -201,7 +208,7 @@ describe('createOfflineForm', () => {
   });
 
   it('discard() clears the draft and resets status to idle', async () => {
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     const form = createOfflineForm<{ name: string }>({
       id: 'clinic-intake',
       endpoint: '/api/patients',

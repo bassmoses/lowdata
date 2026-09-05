@@ -1,6 +1,6 @@
-import { idbDelete, idbGet, idbPut } from './idb.js';
+import type { StorageAdapter } from './storageAdapter.js';
 
-/** How long an IndexedDB-fallback lock record is honored before it's considered stale/abandoned. */
+/** How long a fallback lock record is honored before it's considered stale/abandoned. */
 export const LOCK_STALE_AFTER_MS = 15_000;
 
 export interface SyncLockHandle {
@@ -56,27 +56,31 @@ interface SyncLockRecord {
   expiresAt: number;
 }
 
-async function acquireIdbLock(
-  db: IDBDatabase,
+async function acquireStorageLock(
+  storage: StorageAdapter,
   name: string,
   ownerId: string,
 ): Promise<SyncLockHandle | undefined> {
   const key = `syncLock:${name}`;
   const now = Date.now();
-  const existing = await idbGet<SyncLockRecord>(db, 'meta', key);
+  const existing = await storage.get<SyncLockRecord>('meta', key);
   if (existing && existing.expiresAt > now && existing.ownerId !== ownerId) {
     return undefined;
   }
-  await idbPut<SyncLockRecord>(db, 'meta', { key, ownerId, expiresAt: now + LOCK_STALE_AFTER_MS });
+  await storage.put<SyncLockRecord>('meta', {
+    key,
+    ownerId,
+    expiresAt: now + LOCK_STALE_AFTER_MS,
+  });
   return {
     release: async () => {
-      const current = await idbGet<SyncLockRecord>(db, 'meta', key);
+      const current = await storage.get<SyncLockRecord>('meta', key);
       if (current?.ownerId === ownerId) {
-        await idbDelete(db, 'meta', key);
+        await storage.delete('meta', key);
       }
     },
     renew: async () => {
-      await idbPut<SyncLockRecord>(db, 'meta', {
+      await storage.put<SyncLockRecord>('meta', {
         key,
         ownerId,
         expiresAt: Date.now() + LOCK_STALE_AFTER_MS,
@@ -87,11 +91,13 @@ async function acquireIdbLock(
 
 /**
  * Acquire a cross-tab exclusive lock, preferring the Web Locks API where available (correct by
- * construction, no staleness window) and falling back to an IndexedDB record (stale after
- * `LOCK_STALE_AFTER_MS`) elsewhere. Returns `undefined` if the lock could not be acquired.
+ * construction, no staleness window) and falling back to a `StorageAdapter` record (stale after
+ * `LOCK_STALE_AFTER_MS`) elsewhere — including for non-browser adapters (Electron main, React
+ * Native) where there's no Web Locks API at all. Returns `undefined` if the lock could not be
+ * acquired.
  */
 export async function acquireSyncLock(
-  db: IDBDatabase | undefined,
+  storage: StorageAdapter | undefined,
   name: string,
   ownerId: string,
 ): Promise<SyncLockHandle | undefined> {
@@ -99,6 +105,6 @@ export async function acquireSyncLock(
   if (locks) {
     return acquireWebLock(locks, name);
   }
-  if (!db) return undefined;
-  return acquireIdbLock(db, name, ownerId);
+  if (!storage) return undefined;
+  return acquireStorageLock(storage, name, ownerId);
 }

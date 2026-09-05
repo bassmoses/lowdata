@@ -2,23 +2,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLowdataClient, type LowdataClient } from '../../src/network/client.js';
 import { isQueued } from '../../src/network/types.js';
 import { setOnline } from '../helpers/dom.js';
-import { resetSharedDb } from '../helpers/db.js';
 import { waitForCondition } from '../helpers/wait.js';
+
+// Every test gets its own IndexedDB namespace (a fresh physical database) rather than sharing
+// lowdata's default database and resetting it between tests. That sidesteps IndexedDB's own
+// close/delete lifecycle entirely — no test needs to wait for another test's connection to close
+// before it can safely open (or delete) the same database.
+function uniqueNamespace(): string {
+  return `client-test-${Math.random()}`;
+}
 
 describe('LowdataClient', () => {
   let client: LowdataClient | undefined;
 
-  beforeEach(async () => {
-    await resetSharedDb();
+  beforeEach(() => {
     setOnline(true);
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     client?.destroy();
     client = undefined;
     vi.unstubAllGlobals();
     setOnline(true);
-    await resetSharedDb();
   });
 
   it('passes successful live requests straight through as a Response', async () => {
@@ -26,7 +31,7 @@ describe('LowdataClient', () => {
       'fetch',
       vi.fn(async () => new Response('ok', { status: 200 })),
     );
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
 
     const result = await client.fetch('/api/ping');
     expect(isQueued(result)).toBe(false);
@@ -34,7 +39,7 @@ describe('LowdataClient', () => {
   });
 
   it('queues a mutating request when offline instead of losing it', async () => {
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     setOnline(false);
     window.dispatchEvent(new Event('offline'));
 
@@ -51,7 +56,7 @@ describe('LowdataClient', () => {
   });
 
   it('throws for a GET while offline instead of silently queuing a read', async () => {
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     setOnline(false);
     window.dispatchEvent(new Event('offline'));
 
@@ -64,9 +69,10 @@ describe('LowdataClient', () => {
       vi.fn(async () => new Response(null, { status: 503 })),
     );
     client = createLowdataClient({
+      namespace: uniqueNamespace(),
       retry: { maxRetries: 1, baseDelayMs: 1, maxDelayMs: 5, jitter: 'none' },
       // This test doesn't await the background sync notifyEnqueued() kicks off, so it can still be
-      // mid-flight when afterEach() closes the shared db — a benign, already-covered race
+      // mid-flight when afterEach() destroys the client — a benign, already-covered race
       // (test/network/sync.test.ts asserts drain() swallows exactly this). Silence the resulting
       // onError instead of letting it print a console.warn on every run.
       onError: () => {},
@@ -77,7 +83,7 @@ describe('LowdataClient', () => {
   });
 
   it('rejects a queue item whose body exceeds maxQueueItemSizeBytes', async () => {
-    client = createLowdataClient({ maxQueueItemSizeBytes: 10 });
+    client = createLowdataClient({ namespace: uniqueNamespace(), maxQueueItemSizeBytes: 10 });
     setOnline(false);
     window.dispatchEvent(new Event('offline'));
 
@@ -87,7 +93,7 @@ describe('LowdataClient', () => {
   });
 
   it('queue.add()/list()/cancel()/clear() manage items directly', async () => {
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     const item = await client.queue.add({
       url: '/api/x',
       method: 'POST',
@@ -110,7 +116,7 @@ describe('LowdataClient', () => {
       'fetch',
       vi.fn(async () => new Response(null, { status: 200 })),
     );
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
 
     const eventTypes: string[] = [];
     const unsubscribe = client.onSync((e) => eventTypes.push(e.type));
@@ -125,7 +131,7 @@ describe('LowdataClient', () => {
   });
 
   it('connection.getStatus()/subscribe() reflect the live connection state', () => {
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     expect(client.connection.getStatus().quality).toBe('online');
 
     const listener = vi.fn();
@@ -137,8 +143,114 @@ describe('LowdataClient', () => {
   });
 
   it('destroy() prevents further use', async () => {
-    client = createLowdataClient();
+    client = createLowdataClient({ namespace: uniqueNamespace() });
     client.destroy();
     await expect(client.fetch('/api/x')).rejects.toThrow();
+  });
+
+  it('auto-generates an Idempotency-Key header for a mutating request by default', async () => {
+    const sentHeaders: Array<Record<string, string> | undefined> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        sentHeaders.push(init?.headers as Record<string, string> | undefined);
+        return new Response(null, { status: 200 });
+      }),
+    );
+    client = createLowdataClient({ namespace: uniqueNamespace() });
+
+    await client.fetch('/api/orders', { method: 'POST', body: '{}' });
+    expect(sentHeaders[0]?.['Idempotency-Key']).toBeTruthy();
+  });
+
+  it('does not attach an Idempotency-Key when autoIdempotencyKey is disabled', async () => {
+    const sentHeaders: Array<Record<string, string> | undefined> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        sentHeaders.push(init?.headers as Record<string, string> | undefined);
+        return new Response(null, { status: 200 });
+      }),
+    );
+    client = createLowdataClient({ namespace: uniqueNamespace(), autoIdempotencyKey: false });
+
+    await client.fetch('/api/orders', { method: 'POST', body: '{}' });
+    expect(sentHeaders[0]?.['Idempotency-Key']).toBeUndefined();
+  });
+
+  it('queue.retry() moves a failed item back to pending for another attempt', async () => {
+    client = createLowdataClient({
+      namespace: uniqueNamespace(),
+      retry: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 5, jitter: 'none' },
+    });
+    const item = await client.queue.add({
+      url: '/api/x',
+      method: 'POST',
+      priority: 'normal',
+      body: '{}',
+    });
+    await client.queue.cancel(item.id); // cheapest way to reach a terminal, non-'done' state directly
+    let current = (await client.queue.list()).find((i) => i.id === item.id);
+    expect(current?.status).toBe('cancelled');
+
+    await client.queue.retry(item.id);
+    current = (await client.queue.list()).find((i) => i.id === item.id);
+    expect(current?.status).toBe('pending');
+    expect(current?.attempts).toBe(0);
+  });
+
+  it('queue.subscribe() fires with the current snapshot immediately, and again after a change', async () => {
+    client = createLowdataClient({ namespace: uniqueNamespace() });
+    const snapshots: number[] = [];
+    const unsubscribe = client.queue.subscribe((items) => snapshots.push(items.length));
+
+    await waitForCondition(() => snapshots.length >= 1, { message: 'expected an initial snapshot' });
+    expect(snapshots[0]).toBe(0);
+
+    await client.queue.add({ url: '/api/x', method: 'POST', priority: 'normal', body: '{}' });
+    await waitForCondition(() => snapshots.some((n) => n === 1), {
+      message: `expected a snapshot of length 1, got: ${snapshots.join(', ')}`,
+    });
+
+    unsubscribe();
+  });
+
+  it('isolates two clients in different namespaces from each other', async () => {
+    const suffix = Math.random();
+    const clientA = createLowdataClient({ namespace: `business-a-${suffix}` });
+    const clientB = createLowdataClient({ namespace: `business-b-${suffix}` });
+    try {
+      await clientA.queue.add({ url: '/api/x', method: 'POST', priority: 'normal', body: '{}' });
+      expect(await clientA.queue.list()).toHaveLength(1);
+      expect(await clientB.queue.list()).toHaveLength(0);
+    } finally {
+      clientA.destroy();
+      clientB.destroy();
+    }
+  });
+
+  it("encrypts a queued item's body at rest via a supplied encryption hook", async () => {
+    client = createLowdataClient({
+      namespace: uniqueNamespace(),
+      encryption: {
+        encrypt: async (plaintext) => Buffer.from(plaintext).toString('base64'),
+        decrypt: async (ciphertext) => Buffer.from(ciphertext, 'base64').toString('utf-8'),
+      },
+    });
+    setOnline(false);
+    window.dispatchEvent(new Event('offline'));
+
+    const result = await client.fetch('/api/orders', {
+      method: 'POST',
+      body: JSON.stringify({ amount: 42 }),
+    });
+    expect(isQueued(result)).toBe(true);
+    if (isQueued(result)) {
+      // The public QueuedResult/queue.list() surface always shows plaintext — encryption is an
+      // at-rest concern, invisible to callers.
+      expect(result.item.body).toBe(JSON.stringify({ amount: 42 }));
+    }
+    const listed = (await client.queue.list())[0];
+    expect(listed?.body).toBe(JSON.stringify({ amount: 42 }));
   });
 });
