@@ -12,9 +12,10 @@ describe('progressiveImageState$ (angular/rxjs)', () => {
     vi.stubGlobal('Image', FakeImage as unknown as typeof Image);
 
     const states: Array<{ src: string; isLoaded: boolean }> = [];
-    const subscription = progressiveImageState$({ src: '/full.jpg', placeholder: '/tiny.jpg' }).subscribe(
-      (state) => states.push(state),
-    );
+    const subscription = progressiveImageState$({
+      src: '/full.jpg',
+      placeholder: '/tiny.jpg',
+    }).subscribe((state) => states.push(state));
     expect(states[0]).toEqual({ src: '/tiny.jpg', isLoaded: false });
 
     await waitForCondition(() => states.some((s) => s.isLoaded), {

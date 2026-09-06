@@ -2,10 +2,7 @@ import { ConnectionMonitor } from '../core/connection.js';
 import { createQueueBroadcast, type QueueBroadcast } from '../core/broadcast.js';
 import { Emitter } from '../core/events.js';
 import { createId } from '../core/id.js';
-import {
-  createIndexedDbStorageAdapter,
-  type StorageAdapter,
-} from '../core/storageAdapter.js';
+import { createIndexedDbStorageAdapter, type StorageAdapter } from '../core/storageAdapter.js';
 import { LOWDATA_DB_NAME, LOWDATA_STORES } from '../core/idb.js';
 import type {
   ConnectionInfo,
@@ -251,7 +248,10 @@ export class LowdataClient {
    * "is this mutating", not "is this configured to be queued when offline", so both call sites
    * now key off the method alone.
    */
-  private resolveIdempotencyKey(existingKey: string | undefined, method: HttpMethod): string | undefined {
+  private resolveIdempotencyKey(
+    existingKey: string | undefined,
+    method: HttpMethod,
+  ): string | undefined {
     if (existingKey) return existingKey;
     if (this.config.autoIdempotencyKey === false) return undefined;
     if (!MUTATING_METHODS.has(method)) return undefined;

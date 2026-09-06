@@ -204,7 +204,9 @@ describe('LowdataClient', () => {
     const snapshots: number[] = [];
     const unsubscribe = client.queue.subscribe((items) => snapshots.push(items.length));
 
-    await waitForCondition(() => snapshots.length >= 1, { message: 'expected an initial snapshot' });
+    await waitForCondition(() => snapshots.length >= 1, {
+      message: 'expected an initial snapshot',
+    });
     expect(snapshots[0]).toBe(0);
 
     await client.queue.add({ url: '/api/x', method: 'POST', priority: 'normal', body: '{}' });

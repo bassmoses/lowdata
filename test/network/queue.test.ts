@@ -57,9 +57,7 @@ describe('RequestQueue', () => {
     const queue = makeQueue(`queue-test-deps-${Math.random()}`);
     const now = Date.now();
     await queue.add(makeQueueItem({ id: 'parent', status: 'pending', nextAttemptAt: now }));
-    await queue.add(
-      makeQueueItem({ id: 'child', dependsOn: ['parent'], nextAttemptAt: now }),
-    );
+    await queue.add(makeQueueItem({ id: 'child', dependsOn: ['parent'], nextAttemptAt: now }));
 
     // Parent still present and pending — child is blocked.
     expect((await queue.selectEligible(now)).map((i) => i.id)).toEqual(['parent']);
@@ -130,7 +128,7 @@ describe('RequestQueue', () => {
     expect(listed?.body).toBe('{"secret":true}');
   });
 
-  it('isolates one item\'s decrypt failure instead of it blocking the whole queue', async () => {
+  it("isolates one item's decrypt failure instead of it blocking the whole queue", async () => {
     const errors: Array<{ scope: string }> = [];
     const queue = new RequestQueue(
       openTestAdapter(`queue-test-decrypt-fail-${Math.random()}`),

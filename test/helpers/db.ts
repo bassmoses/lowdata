@@ -1,4 +1,9 @@
-import { LOWDATA_DB_NAME, LOWDATA_DB_VERSION, LOWDATA_STORES, openDatabase } from '../../src/core/idb.js';
+import {
+  LOWDATA_DB_NAME,
+  LOWDATA_DB_VERSION,
+  LOWDATA_STORES,
+  openDatabase,
+} from '../../src/core/idb.js';
 import {
   _resetIndexedDbPoolForTests,
   createIndexedDbStorageAdapter,

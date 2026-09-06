@@ -18,3 +18,19 @@ export class FakeImage {
     return this._src;
   }
 }
+
+/** Same as `FakeImage`, but simulates a failed load (404, corrupt file, network error) instead. */
+export class FakeFailingImage {
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  private _src = '';
+
+  set src(value: string) {
+    this._src = value;
+    queueMicrotask(() => this.onerror?.());
+  }
+
+  get src(): string {
+    return this._src;
+  }
+}

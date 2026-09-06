@@ -25,7 +25,9 @@ describe('createQueueBroadcast', () => {
 
     tabA.post();
 
-    await waitForCondition(() => bNotified, { message: 'expected the other channel to be notified' });
+    await waitForCondition(() => bNotified, {
+      message: 'expected the other channel to be notified',
+    });
     tabA.destroy();
     tabB.destroy();
   });

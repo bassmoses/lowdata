@@ -194,9 +194,9 @@ describe('SyncManager', () => {
       (e) => e.type === 'items-blocked' && e.reason === 'dependency',
     );
     expect(blockedEvent).toBeDefined();
-    expect(
-      blockedEvent?.type === 'items-blocked' && blockedEvent.items.map((i) => i.id),
-    ).toEqual(['child']);
+    expect(blockedEvent?.type === 'items-blocked' && blockedEvent.items.map((i) => i.id)).toEqual([
+      'child',
+    ]);
     sync.destroy();
   });
 
@@ -226,9 +226,9 @@ describe('SyncManager', () => {
       (e) => e.type === 'items-blocked' && e.reason === 'circuit-breaker',
     );
     expect(blockedEvent).toBeDefined();
-    expect(
-      blockedEvent?.type === 'items-blocked' && blockedEvent.items.map((i) => i.id),
-    ).toContain('newly-added');
+    expect(blockedEvent?.type === 'items-blocked' && blockedEvent.items.map((i) => i.id)).toContain(
+      'newly-added',
+    );
     sync.destroy();
   });
 
@@ -305,17 +305,13 @@ describe('SyncManager', () => {
   });
 
   it('migrates a queue item whose schemaVersion is stale before sending it', async () => {
-    const { queue, sync } = setup(
-      `sync-test-migrate-${Math.random()}`,
-      undefined,
-      {
-        schemaVersion: 2,
-        migrateQueueItem: (item) => ({
-          ...item,
-          body: JSON.stringify({ migrated: true, was: item.body }),
-        }),
-      },
-    );
+    const { queue, sync } = setup(`sync-test-migrate-${Math.random()}`, undefined, {
+      schemaVersion: 2,
+      migrateQueueItem: (item) => ({
+        ...item,
+        body: JSON.stringify({ migrated: true, was: item.body }),
+      }),
+    });
     let sentBody: unknown;
     vi.stubGlobal(
       'fetch',

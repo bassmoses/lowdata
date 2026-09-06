@@ -40,7 +40,8 @@ a userland recipe in the README rather than the core.
   (network + forms) belongs behind its own subpath (see `lowdata/media`, `lowdata/react`), not the
   root barrel.
 - **Framework-agnostic core, thin framework bindings.** Logic lives in `src/core`, `src/network`,
-  `src/forms`, `src/media`; `src/react` (and any future framework package) should only adapt it.
+  `src/forms`, `src/media`; `src/react`/`src/vue`/`src/svelte`/`src/angular`/`src/solid` (and any
+  future framework package) should only adapt it, never duplicate it.
 - **Fail open, not closed.** Environments without IndexedDB or `navigator.connection` should
   degrade gracefully (in-memory queue, optimistic connection assumptions) rather than throw.
 

@@ -44,7 +44,7 @@ describe('createIndexedDbStorageAdapter', () => {
     await adapter.destroy?.();
   });
 
-  it('two different dbName adapters never see each other\'s data (namespace isolation)', async () => {
+  it("two different dbName adapters never see each other's data (namespace isolation)", async () => {
     const a = createIndexedDbStorageAdapter({ dbName: `ns-a-${Math.random()}`, stores });
     const b = createIndexedDbStorageAdapter({ dbName: `ns-b-${Math.random()}`, stores });
 

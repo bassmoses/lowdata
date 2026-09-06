@@ -263,17 +263,17 @@ loader.subscribe(({ src, isLoaded }) => setImgSrc(src));
 
 ## API reference
 
-| Subpath           | Exports                                                                                                                                                                                                                       |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Subpath           | Exports                                                                                                                                                                                                                                   |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `lowdata`         | `createLowdataClient`, `LowdataClient`, `isQueued`, `LowdataRequestError`, `createOfflineForm`, `getConnectionQuality`, `onConnectionChange`, `createIndexedDbStorageAdapter`, `createMemoryStorageAdapter`, `CircuitBreaker`, core types |
-| `lowdata/network` | Everything in the root, plus `RequestQueue`, `SyncManager`, `ConnectionMonitor`, `defaultRetryOn`, `defaultBreakerKey`, `createQueueBroadcast`                                                                              |
-| `lowdata/forms`   | `createOfflineForm`, form types                                                                                                                                                                                              |
-| `lowdata/media`   | `compressImage`, `createProgressiveImageLoader`, `presetForQuality`                                                                                                                                                          |
-| `lowdata/react`   | `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`, `useProgressiveImage`                                                                                                                                           |
-| `lowdata/vue`     | `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`, `useProgressiveImage` (Composition API)                                                                                                                        |
-| `lowdata/svelte`  | `connectionStatus`, `createOfflineFormStore`, `createProgressiveImageStore`, `createLowdataClient` (stores; zero dependency on `svelte`)                                                                                    |
-| `lowdata/angular` | `connectionStatus$`, `onSync$`, `offlineFormStatus$`, `progressiveImageState$`, `createLowdataClient`, `createOfflineForm` (RxJS Observables)                                                                               |
-| `lowdata/solid`   | `createConnectionStatus`, `createLowdataClient`, `createOfflineForm`, `createProgressiveImage` (Solid primitives)                                                                                                            |
+| `lowdata/network` | Everything in the root, plus `RequestQueue`, `SyncManager`, `ConnectionMonitor`, `defaultRetryOn`, `defaultBreakerKey`, `createQueueBroadcast`                                                                                            |
+| `lowdata/forms`   | `createOfflineForm`, form types                                                                                                                                                                                                           |
+| `lowdata/media`   | `compressImage`, `createProgressiveImageLoader`, `presetForQuality`                                                                                                                                                                       |
+| `lowdata/react`   | `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`, `useProgressiveImage`                                                                                                                                                        |
+| `lowdata/vue`     | `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`, `useProgressiveImage` (Composition API)                                                                                                                                      |
+| `lowdata/svelte`  | `connectionStatus`, `createOfflineFormStore`, `createProgressiveImageStore`, `createLowdataClient` (stores; zero dependency on `svelte`)                                                                                                  |
+| `lowdata/angular` | `connectionStatus$`, `onSync$`, `offlineFormStatus$`, `progressiveImageState$`, `createLowdataClient`, `createOfflineForm` (RxJS Observables)                                                                                             |
+| `lowdata/solid`   | `createConnectionStatus`, `createLowdataClient`, `createOfflineForm`, `createProgressiveImage` (Solid primitives)                                                                                                                         |
 
 Full type signatures are in each subpath's shipped `.d.ts` — every export is documented with TSDoc.
 
@@ -321,6 +321,7 @@ from `lowdata` directly).
   via `onScopeDispose` — so they work from a bare `effectScope()`, not just inside a component's
   `setup()`) plus the same raw `createLowdataClient`/`LowdataClient` re-export as React, for a
   Pinia store or other non-component usage. `vue` is an optional peer dependency (`>=3`).
+
   ```ts
   import { useConnectionStatus, useOfflineForm } from 'lowdata/vue';
 
@@ -333,6 +334,7 @@ from `lowdata` directly).
   `createProgressiveImageStore` all return an object satisfying Svelte's store contract
   (`.subscribe(run): unsubscribe`). This subpath needs **no dependency on `svelte` itself** — the
   contract is structural, so `$`-auto-subscription works regardless.
+
   ```svelte
   <script>
     import { connectionStatus, createOfflineFormStore } from 'lowdata/svelte';
@@ -348,6 +350,7 @@ from `lowdata` directly).
   decorators, so there's no Angular-major-version coupling; wrap in your own `@Injectable()`
   service as needed. `rxjs` is an optional peer dependency (`>=7`, already present in virtually
   every Angular app).
+
   ```ts
   import { connectionStatus$ } from 'lowdata/angular';
   // in a service: readonly status$ = connectionStatus$();
@@ -365,7 +368,7 @@ from `lowdata` directly).
 
 ## Multi-tenant apps
 
-Give each tenant its own `LowdataClient`, namespaced — this isolates *everything* that client
+Give each tenant its own `LowdataClient`, namespaced — this isolates _everything_ that client
 owns: its queue (a separate physical IndexedDB database), its circuit breaker (a fresh instance per
 client, never shared across tenants even against the same API origin), and — critically — any
 `createOfflineForm` built from it, whose drafts are stored through that same client's own adapter
@@ -397,11 +400,14 @@ every extension point needed to run there is already exposed:
   existing reconnect-triggers-a-drain behavior works unchanged:
   ```ts
   NetInfo.addEventListener((state) =>
-    client.connection.report({ online: !!state.isConnected, quality: state.isConnected ? 'online' : 'offline' }),
+    client.connection.report({
+      online: !!state.isConnected,
+      quality: state.isConnected ? 'online' : 'offline',
+    }),
   );
   ```
 - **Manual sync**: the periodic safety poll relies on `document.visibilityState`, which doesn't
-  exist off the DOM either. Call `client.sync()` from whatever *does* signal "maybe back online"
+  exist off the DOM either. Call `client.sync()` from whatever _does_ signal "maybe back online"
   there — `AppState` foregrounding, a pull-to-refresh, a cron tick in a Node service:
   ```ts
   AppState.addEventListener('change', (state) => {
@@ -442,12 +448,12 @@ Sizes below are the unminified ESM build's gzip size — real-world minified siz
 bundler) will be smaller. Each subpath is independently tree-shakeable; you only pay for what you
 import.
 
-| Subpath                                                | gzip (unminified) |
-| ------------------------------------------------------- | ----------------- |
+| Subpath                                                  | gzip (unminified) |
+| -------------------------------------------------------- | ----------------- |
 | `lowdata` (core + network + forms)                       | ~14.7 KB          |
 | `lowdata/network` alone                                  | ~13.5 KB          |
 | `lowdata/media` alone                                    | ~3.0 KB           |
-| `lowdata/react` / `vue` / `svelte` / `angular` / `solid` | ~15 KB each        |
+| `lowdata/react` / `vue` / `svelte` / `angular` / `solid` | ~15 KB each       |
 
 Framework subpaths are each a standalone bundle (not a thin diff on top of `lowdata`) — importing
 one doesn't require also fetching the root package separately.

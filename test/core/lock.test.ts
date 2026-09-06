@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { createIndexedDbStorageAdapter, type StorageAdapter } from '../../src/core/storageAdapter.js';
+import {
+  createIndexedDbStorageAdapter,
+  type StorageAdapter,
+} from '../../src/core/storageAdapter.js';
 import { acquireSyncLock } from '../../src/core/lock.js';
 
 function makeStorage(name: string): StorageAdapter {

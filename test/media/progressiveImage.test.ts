@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProgressiveImageLoader } from '../../src/media/progressiveImage.js';
-import { FakeImage } from '../helpers/fakeImage.js';
+import type { ProgressiveImageState } from '../../src/media/progressiveImage.js';
+import { FakeFailingImage, FakeImage } from '../helpers/fakeImage.js';
 
 describe('createProgressiveImageLoader', () => {
   afterEach(() => {
@@ -20,6 +21,21 @@ describe('createProgressiveImageLoader', () => {
 
     expect(loader.getState()).toEqual({ src: '/full.jpg', isLoaded: true });
     expect(states).toContainEqual({ src: '/full.jpg', isLoaded: true });
+
+    loader.destroy();
+  });
+
+  it('reports error: true (without ever setting isLoaded) when the full image fails to load', async () => {
+    vi.stubGlobal('Image', FakeFailingImage as unknown as typeof Image);
+
+    const loader = createProgressiveImageLoader({ src: '/broken.jpg', placeholder: '/tiny.jpg' });
+    const states: ProgressiveImageState[] = [];
+    loader.subscribe((s) => states.push(s));
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(loader.getState()).toEqual({ src: '/tiny.jpg', isLoaded: false, error: true });
+    expect(states).toContainEqual({ src: '/tiny.jpg', isLoaded: false, error: true });
 
     loader.destroy();
   });

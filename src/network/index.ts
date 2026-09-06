@@ -34,9 +34,6 @@ export {
   createIndexedDbStorageAdapter,
   createMemoryStorageAdapter,
 } from '../core/storageAdapter.js';
-export type {
-  StorageAdapter,
-  IndexedDbStorageAdapterOptions,
-} from '../core/storageAdapter.js';
+export type { StorageAdapter, IndexedDbStorageAdapterOptions } from '../core/storageAdapter.js';
 export { createQueueBroadcast } from '../core/broadcast.js';
 export type { QueueBroadcast } from '../core/broadcast.js';

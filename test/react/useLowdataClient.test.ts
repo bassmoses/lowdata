@@ -18,7 +18,9 @@ describe('useLowdataClient', () => {
   });
 
   it('destroys the client on unmount', () => {
-    const { result, unmount } = renderHook(() => useLowdataClient({ namespace: uniqueNamespace() }));
+    const { result, unmount } = renderHook(() =>
+      useLowdataClient({ namespace: uniqueNamespace() }),
+    );
     const destroySpy = vi.spyOn(result.current, 'destroy');
 
     unmount();
