@@ -313,11 +313,14 @@ from `lowdata` directly).
   directly — no framework glue needed, nothing here assumes a specific framework exists.
 
 - **React** (`lowdata/react`): `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`,
-  `useProgressiveImage`. `react` is an optional peer dependency (`>=17`).
+  `useProgressiveImage` — plus a re-export of the raw `createLowdataClient`/`LowdataClient` for
+  code that needs a client outside a component's lifecycle (a Redux/Zustand store, a module-level
+  singleton). `react` is an optional peer dependency (`>=17`).
 
-- **Vue** (`lowdata/vue`): the same four composables, Composition-API-native (`Ref`s, cleaned up
+- **Vue** (`lowdata/vue`): the same four composables (Composition-API-native — `Ref`s, cleaned up
   via `onScopeDispose` — so they work from a bare `effectScope()`, not just inside a component's
-  `setup()`). `vue` is an optional peer dependency (`>=3`).
+  `setup()`) plus the same raw `createLowdataClient`/`LowdataClient` re-export as React, for a
+  Pinia store or other non-component usage. `vue` is an optional peer dependency (`>=3`).
   ```ts
   import { useConnectionStatus, useOfflineForm } from 'lowdata/vue';
 

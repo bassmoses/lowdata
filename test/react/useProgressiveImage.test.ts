@@ -1,21 +1,7 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useProgressiveImage } from '../../src/react/useProgressiveImage.js';
-
-class FakeImage {
-  onload: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  private _src = '';
-
-  set src(value: string) {
-    this._src = value;
-    queueMicrotask(() => this.onload?.());
-  }
-
-  get src(): string {
-    return this._src;
-  }
-}
+import { FakeImage } from '../helpers/fakeImage.js';
 
 describe('useProgressiveImage', () => {
   afterEach(() => {

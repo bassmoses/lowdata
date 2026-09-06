@@ -3,7 +3,13 @@ import { shareReplay } from 'rxjs/operators';
 import type { OfflineForm } from '../forms/offlineForm.js';
 import type { FormStatus } from '../forms/types.js';
 
-/** An RxJS Observable of an `OfflineForm`'s status — build the form with `createOfflineForm` (from `lowdata`), then wrap it here for an Angular template's `| async`. */
+/**
+ * An RxJS Observable of an `OfflineForm`'s status — build the form with `createOfflineForm` (from
+ * `lowdata`), then wrap it here for an Angular template's `| async`. Unsubscribing from the
+ * returned Observable only releases *this* subscription — it does not call `form.destroy()`, since
+ * the form is owned by whoever created it, not by this wrapper. Call `form.destroy()` yourself
+ * (e.g. in `ngOnDestroy`) or its `onSync` subscription leaks on the shared/default client.
+ */
 export function offlineFormStatus$<T>(form: OfflineForm<T>): Observable<FormStatus> {
   return new Observable<FormStatus>((subscriber) => {
     subscriber.next(form.getStatus());

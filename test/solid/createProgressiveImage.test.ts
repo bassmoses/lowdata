@@ -1,22 +1,8 @@
 import { createRoot } from 'solid-js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createProgressiveImage } from '../../src/solid/createProgressiveImage.js';
+import { FakeImage } from '../helpers/fakeImage.js';
 import { waitForCondition } from '../helpers/wait.js';
-
-class FakeImage {
-  onload: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  private _src = '';
-
-  set src(value: string) {
-    this._src = value;
-    queueMicrotask(() => this.onload?.());
-  }
-
-  get src(): string {
-    return this._src;
-  }
-}
 
 describe('createProgressiveImage (solid)', () => {
   afterEach(() => {
