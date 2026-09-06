@@ -229,6 +229,48 @@ describe('LowdataClient', () => {
     }
   });
 
+  it('sync() manually drains the queue — for hosts with no automatic reconnect/visibility trigger (React Native, Electron main, Node)', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    client = createLowdataClient({ namespace: uniqueNamespace() });
+
+    setOnline(false);
+    window.dispatchEvent(new Event('offline'));
+    await client.fetch('/api/orders', { method: 'POST', body: '{}' });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    // Report connectivity manually (as a React Native NetInfo/Electron/Node host would) rather
+    // than dispatching a DOM event. That report *also* auto-triggers SyncManager's own
+    // reconnect listener — same as a real browser event would — so this can't prove sync() alone
+    // caused the send; what it proves is sync()'s actual contract: calling it either performs the
+    // drain itself or safely no-ops into an already-in-progress one, and either way the queued
+    // item reliably ends up sent. waitForCondition (not an immediate assertion) is required here
+    // precisely because that auto-triggered drain is fire-and-forget, not awaited by sync().
+    client.connection.report({ quality: 'online', online: true });
+    await client.sync();
+
+    await waitForCondition(() => fetchMock.mock.calls.length > 0, {
+      message: 'expected sync() to result in the queued item being sent',
+    });
+    expect(await client.queue.list()).toHaveLength(0);
+  });
+
+  it("connection.report() manually feeds connectivity — reporting 'online' triggers the same auto-drain a real browser event would", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    client = createLowdataClient({ namespace: uniqueNamespace() });
+
+    client.connection.report({ quality: 'offline', online: false });
+    const result = await client.fetch('/api/orders', { method: 'POST', body: '{}' });
+    expect(isQueued(result)).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    client.connection.report({ quality: 'online', online: true });
+    await waitForCondition(() => fetchMock.mock.calls.length > 0, {
+      message: 'expected reporting online to trigger an automatic drain',
+    });
+  });
+
   it("encrypts a queued item's body at rest via a supplied encryption hook", async () => {
     client = createLowdataClient({
       namespace: uniqueNamespace(),

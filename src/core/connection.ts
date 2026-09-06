@@ -100,6 +100,20 @@ export class ConnectionMonitor {
     return this.emitter.subscribe(listener);
   }
 
+  /**
+   * Manually report connectivity — the escape hatch for hosts with no `window`/`navigator.onLine`
+   * to observe in the first place: React Native (wire up `NetInfo.addEventListener`), an Electron
+   * main process, or a plain Node backend with its own reachability check. Merges over the last
+   * known info and notifies subscribers exactly like a real browser event would — in particular,
+   * `SyncManager` is already subscribed, so reporting `{ quality: 'online' }` here triggers an
+   * immediate drain the same way a browser's `online` event does.
+   */
+  reportStatus(update: Partial<ConnectionInfo>): ConnectionInfo {
+    this.current = { ...this.current, ...update };
+    this.emitter.emit(this.current);
+    return this.current;
+  }
+
   /** Manually re-run the opt-in ping probe (no-op if no `pingUrl` was configured). */
   async probeNow(): Promise<ConnectionInfo> {
     if (!this.options.pingUrl || !hasNavigator() || navigator.onLine === false) {

@@ -36,6 +36,10 @@ export function createOfflineForm<T = Record<string, unknown>>(
   config: OfflineFormConfig<T>,
 ): OfflineForm<T> {
   const client = config.client ?? getDefaultClient();
+  // Drafts/submissions are stored through *this client's own* adapter — not a hardcoded shared
+  // one — so two tenants with two differently-namespaced clients never share a draft just because
+  // they both happen to use a form with the same `id`.
+  const storage = client.storage;
   const emitter = new Emitter<{ status: FormStatus; detail?: FormSubmissionDetail }>();
 
   let status: FormStatus = 'idle';
@@ -44,7 +48,7 @@ export function createOfflineForm<T = Record<string, unknown>>(
   let unsubscribeSync: Unsubscribe | undefined;
 
   // Recover any draft left over from a previous session (e.g. the page reloaded mid-type).
-  void loadDraft<T>(config.id).then((draft) => {
+  void loadDraft<T>(storage, config.id).then((draft) => {
     if (draft && status === 'idle') {
       lastValues = draft.values;
       setStatus('saved');
@@ -61,9 +65,9 @@ export function createOfflineForm<T = Record<string, unknown>>(
     submissionId: string,
     patch: Partial<FormRecord<T>>,
   ): Promise<void> {
-    const existing = await getSubmission<T>(submissionId);
+    const existing = await getSubmission<T>(storage, submissionId);
     if (!existing) return;
-    await saveSubmission<T>({ ...existing, ...patch, updatedAt: Date.now() });
+    await saveSubmission<T>(storage, { ...existing, ...patch, updatedAt: Date.now() });
   }
 
   async function onSubmissionSettled(
@@ -77,7 +81,7 @@ export function createOfflineForm<T = Record<string, unknown>>(
     // submission's success should clear the recoverable draft.
     const isActive = submissionId === activeSubmissionId;
     if (next === 'success' && isActive) {
-      await discardDraft(config.id);
+      await discardDraft(storage, config.id);
     }
     if (isActive) {
       setStatus(next, { submissionId, error });
@@ -115,7 +119,7 @@ export function createOfflineForm<T = Record<string, unknown>>(
 
   async function save(values: T): Promise<void> {
     lastValues = values;
-    await saveDraft(config.id, values);
+    await saveDraft(storage, config.id, values);
     setStatus('saved');
   }
 
@@ -127,7 +131,7 @@ export function createOfflineForm<T = Record<string, unknown>>(
     const payload = config.transform ? config.transform(values) : JSON.stringify(values);
     const body = typeof payload === 'string' ? payload : JSON.stringify(payload);
 
-    await saveSubmission<T>({
+    await saveSubmission<T>(storage, {
       submissionId,
       formId: config.id,
       kind: 'submission',
@@ -174,7 +178,7 @@ export function createOfflineForm<T = Record<string, unknown>>(
   }
 
   async function discard(): Promise<void> {
-    await discardDraft(config.id);
+    await discardDraft(storage, config.id);
     lastValues = undefined;
     activeSubmissionId = undefined;
     destroy();

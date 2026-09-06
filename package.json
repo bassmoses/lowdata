@@ -13,7 +13,14 @@
     "africa",
     "form",
     "image-compression",
-    "pwa"
+    "pwa",
+    "multi-tenant",
+    "react-native",
+    "electron",
+    "vue",
+    "svelte",
+    "angular",
+    "solid"
   ],
   "license": "MIT",
   "author": "Moses Bass <bassmoses996@gmail.com>",
@@ -45,6 +52,18 @@
       ],
       "react": [
         "./dist/react.d.ts"
+      ],
+      "vue": [
+        "./dist/vue.d.ts"
+      ],
+      "svelte": [
+        "./dist/svelte.d.ts"
+      ],
+      "angular": [
+        "./dist/angular.d.ts"
+      ],
+      "solid": [
+        "./dist/solid.d.ts"
       ]
     }
   },
@@ -74,6 +93,26 @@
       "import": "./dist/react.js",
       "require": "./dist/react.cjs"
     },
+    "./vue": {
+      "types": "./dist/vue.d.ts",
+      "import": "./dist/vue.js",
+      "require": "./dist/vue.cjs"
+    },
+    "./svelte": {
+      "types": "./dist/svelte.d.ts",
+      "import": "./dist/svelte.js",
+      "require": "./dist/svelte.cjs"
+    },
+    "./angular": {
+      "types": "./dist/angular.d.ts",
+      "import": "./dist/angular.js",
+      "require": "./dist/angular.cjs"
+    },
+    "./solid": {
+      "types": "./dist/solid.d.ts",
+      "import": "./dist/solid.js",
+      "require": "./dist/solid.cjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -102,10 +141,22 @@
     "release": "semantic-release"
   },
   "peerDependencies": {
-    "react": ">=17"
+    "react": ">=17",
+    "vue": ">=3",
+    "rxjs": ">=7",
+    "solid-js": ">=1"
   },
   "peerDependenciesMeta": {
     "react": {
+      "optional": true
+    },
+    "vue": {
+      "optional": true
+    },
+    "rxjs": {
+      "optional": true
+    },
+    "solid-js": {
       "optional": true
     }
   },
@@ -127,10 +178,13 @@
     "prettier": "^3.3.3",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "rxjs": "^7.8.2",
     "semantic-release": "^25.0.9",
     "serve": "^14.2.6",
+    "solid-js": "^1.9.15",
     "tsup": "^8.3.0",
     "typescript": "^5.6.3",
-    "vitest": "^2.1.2"
+    "vitest": "^2.1.2",
+    "vue": "^3.5.42"
   }
 }

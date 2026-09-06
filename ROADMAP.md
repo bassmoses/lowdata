@@ -12,13 +12,6 @@ could pick up queued items even after the tab closes. Deferred because it adds r
 one) for a smaller slice of use cases than the core tab-open case — and lowdata's queue format is
 already usable from a hand-written service worker today if you need this now.
 
-## Vue-specific subpath
-
-The framework-agnostic core already works fine from a small Vue composable (see README → Framework
-guides) — a dedicated `lowdata/vue` subpath with pre-built composables would just save writing
-that thin wrapper yourself. Deferred until there's demand; the value-add over the documented
-composable pattern is small.
-
 ## CRDT / automatic merge conflict resolution
 
 lowdata detects conflicts (comparing timestamps) and reports them, and provides the primitives
@@ -35,4 +28,8 @@ storage-quota check (the `'quota'` error scope) — see the README's "Offline qu
 Also shipped, not originally listed here: a pluggable `StorageAdapter` interface (for non-browser
 hosts like Electron's main process or React Native), per-queue-item encryption at rest, `dependsOn`
 ordering between queued items, `maxAgeMs` expiry, `queue.retry()`, namespaced/isolated queues per
-client, queue schema versioning + migration, and automatic `Idempotency-Key` generation.
+client (with `createOfflineForm`'s drafts now routed through that same namespace, closing a
+cross-tenant leak), queue schema versioning + migration, automatic `Idempotency-Key` generation,
+`connection.report()`/`client.sync()` for hosts with no DOM connectivity signal (React Native,
+Electron's main process, Node), and dedicated `lowdata/vue`, `lowdata/svelte`, `lowdata/angular`,
+`lowdata/solid` subpaths alongside `lowdata/react`.

@@ -9,7 +9,7 @@ flaky café Wi-Fi, or mid-load-shedding. Framework-agnostic, near-zero dependenc
 [![CI](https://github.com/bassmoses/lowdata/actions/workflows/ci.yml/badge.svg)](https://github.com/bassmoses/lowdata/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/lowdata.svg)](https://www.npmjs.com/package/lowdata)
 [![license](https://img.shields.io/npm/l/lowdata.svg)](./LICENSE)
-[![bundle size](https://img.shields.io/badge/core%20%2B%20network%20%2B%20forms-~9%20KB%20gzip-brightgreen.svg)](#bundle-size)
+[![bundle size](https://img.shields.io/badge/core%20%2B%20network%20%2B%20forms-~15%20KB%20gzip-brightgreen.svg)](#bundle-size)
 
 ```ts
 import { createLowdataClient } from 'lowdata';
@@ -42,7 +42,11 @@ pnpm add lowdata
 # or: npm install lowdata / yarn add lowdata
 ```
 
-React is an **optional** peer dependency — only needed if you use the `lowdata/react` hooks.
+React, Vue, RxJS, and Solid are all **optional** peer dependencies — only needed if you use the
+matching `lowdata/react` / `lowdata/vue` / `lowdata/angular` / `lowdata/solid` bindings. Svelte
+needs no dependency at all (see [Framework guides](#framework-guides)). Plain `lowdata`/`lowdata/network`/`lowdata/forms` work
+from any framework, or none — see [Runtime support](#runtime-support-react-native-electron-node) for
+non-browser hosts (React Native, Electron, Node).
 
 ## Quick start
 
@@ -266,6 +270,10 @@ loader.subscribe(({ src, isLoaded }) => setImgSrc(src));
 | `lowdata/forms`   | `createOfflineForm`, form types                                                                                                                                                                                              |
 | `lowdata/media`   | `compressImage`, `createProgressiveImageLoader`, `presetForQuality`                                                                                                                                                          |
 | `lowdata/react`   | `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`, `useProgressiveImage`                                                                                                                                           |
+| `lowdata/vue`     | `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`, `useProgressiveImage` (Composition API)                                                                                                                        |
+| `lowdata/svelte`  | `connectionStatus`, `createOfflineFormStore`, `createProgressiveImageStore`, `createLowdataClient` (stores; zero dependency on `svelte`)                                                                                    |
+| `lowdata/angular` | `connectionStatus$`, `onSync$`, `offlineFormStatus$`, `progressiveImageState$`, `createLowdataClient`, `createOfflineForm` (RxJS Observables)                                                                               |
+| `lowdata/solid`   | `createConnectionStatus`, `createLowdataClient`, `createOfflineForm`, `createProgressiveImage` (Solid primitives)                                                                                                            |
 
 Full type signatures are in each subpath's shipped `.d.ts` — every export is documented with TSDoc.
 
@@ -296,29 +304,119 @@ or cross-tab-raced request is still possible in rare edge cases.
 
 ## Framework guides
 
-- **Vanilla JS / any framework:** use `lowdata`/`lowdata/forms`/`lowdata/media` directly — no
-  framework glue needed.
-- **React:** `lowdata/react` ships thin hooks over the framework-agnostic core.
-- **Vue:** no dedicated subpath yet — wrap the core in a composable:
-  ```ts
-  import { ref, onUnmounted } from 'vue';
-  import { onConnectionChange, getConnectionQuality } from 'lowdata';
+Every UI-framework subpath is a thin binding over the same framework-agnostic core (`lowdata`,
+`lowdata/forms`, `lowdata/media`) — same `LowdataClient`, same queue, same events. Pick the one
+matching your stack; mixing is fine too (e.g. an Angular app can still call `createOfflineForm`
+from `lowdata` directly).
 
-  export function useConnectionStatus() {
-    const status = ref(getConnectionQuality());
-    const unsubscribe = onConnectionChange((info) => (status.value = info));
-    onUnmounted(unsubscribe);
-    return status;
-  }
+- **Vanilla JS / any framework not listed below:** use `lowdata`/`lowdata/forms`/`lowdata/media`
+  directly — no framework glue needed, nothing here assumes a specific framework exists.
+
+- **React** (`lowdata/react`): `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`,
+  `useProgressiveImage`. `react` is an optional peer dependency (`>=17`).
+
+- **Vue** (`lowdata/vue`): the same four composables, Composition-API-native (`Ref`s, cleaned up
+  via `onScopeDispose` — so they work from a bare `effectScope()`, not just inside a component's
+  `setup()`). `vue` is an optional peer dependency (`>=3`).
+  ```ts
+  import { useConnectionStatus, useOfflineForm } from 'lowdata/vue';
+
+  const status = useConnectionStatus(); // Ref<ConnectionInfo>
+  const form = useOfflineForm({ id: 'clinic-intake', endpoint: '/api/patients' });
+  // form.status is a Ref<FormStatus>; form.save/submit/retry are plain async functions
   ```
+
+- **Svelte** (`lowdata/svelte`): stores, not hooks — `connectionStatus()`, `createOfflineFormStore`,
+  `createProgressiveImageStore` all return an object satisfying Svelte's store contract
+  (`.subscribe(run): unsubscribe`). This subpath needs **no dependency on `svelte` itself** — the
+  contract is structural, so `$`-auto-subscription works regardless.
+  ```svelte
+  <script>
+    import { connectionStatus, createOfflineFormStore } from 'lowdata/svelte';
+    const status = connectionStatus();
+    const form = createOfflineFormStore({ id: 'clinic-intake', endpoint: '/api/patients' });
+  </script>
+  <p>{$status.quality} — {$form}</p>
+  ```
+
+- **Angular** (`lowdata/angular`): RxJS Observables — `connectionStatus$()`, `onSync$(client)`,
+  `offlineFormStatus$(form)`, `progressiveImageState$()` — each multicast via `shareReplay` so
+  several template `| async` bindings share one underlying listener. No `@angular/core` import, no
+  decorators, so there's no Angular-major-version coupling; wrap in your own `@Injectable()`
+  service as needed. `rxjs` is an optional peer dependency (`>=7`, already present in virtually
+  every Angular app).
+  ```ts
+  import { connectionStatus$ } from 'lowdata/angular';
+  // in a service: readonly status$ = connectionStatus$();
+  // in a template: {{ (status$ | async)?.quality }}
+  ```
+
+- **Solid** (`lowdata/solid`): primitives following Solid's own `createX` convention —
+  `createConnectionStatus`, `createLowdataClient`, `createOfflineForm`, `createProgressiveImage` —
+  cleaned up via `onCleanup`, so they work inside any reactive root, not just a component.
+  `solid-js` is an optional peer dependency (`>=1`).
+  ```ts
+  import { createConnectionStatus } from 'lowdata/solid';
+  const status = createConnectionStatus(); // Accessor<ConnectionInfo> — call status() to read
+  ```
+
+## Multi-tenant apps
+
+Give each tenant its own `LowdataClient`, namespaced — this isolates *everything* that client
+owns: its queue (a separate physical IndexedDB database), its circuit breaker (a fresh instance per
+client, never shared across tenants even against the same API origin), and — critically — any
+`createOfflineForm` built from it, whose drafts are stored through that same client's own adapter
+rather than one hardcoded shared database:
+
+```ts
+const client = createLowdataClient({ namespace: currentBusinessId });
+const form = createOfflineForm({ id: 'clinic-intake', endpoint: '/api/patients', client });
+// Two different businessIds here never share a queue, a draft, or a breaker's failure count.
+```
+
+One caveat: `createOfflineForm`/hooks called **without** an explicit `client` fall back to one
+lazily-created default (unnamespaced) client, shared by every such call in the process — fine for
+single-tenant apps, but always pass your tenant's `client` explicitly in a multi-tenant one.
+
+## Runtime support (React Native, Electron, Node)
+
+The core has no built-in adapter for these — no runtime dependency is added on your behalf — but
+every extension point needed to run there is already exposed:
+
+- **Storage**: React Native/Electron's main process/Node have no `indexedDB`. Supply your own
+  `StorageAdapter` (SQLite, AsyncStorage, anything with `put`/`get`/`getAll`/`delete`/`clear`/`count`)
+  instead of relying on the automatic in-memory fallback:
+  ```ts
+  createLowdataClient({ storage: myAsyncStorageAdapter });
+  ```
+- **Connectivity**: without a DOM `window`, lowdata can't hear a browser `online`/`offline` event.
+  Feed it your own signal — React Native's `NetInfo`, Electron's own reachability check — and the
+  existing reconnect-triggers-a-drain behavior works unchanged:
+  ```ts
+  NetInfo.addEventListener((state) =>
+    client.connection.report({ online: !!state.isConnected, quality: state.isConnected ? 'online' : 'offline' }),
+  );
+  ```
+- **Manual sync**: the periodic safety poll relies on `document.visibilityState`, which doesn't
+  exist off the DOM either. Call `client.sync()` from whatever *does* signal "maybe back online"
+  there — `AppState` foregrounding, a pull-to-refresh, a cron tick in a Node service:
+  ```ts
+  AppState.addEventListener('change', (state) => {
+    if (state === 'active') void client.sync();
+  });
+  ```
+- `lowdata/media` (Canvas-based image compression) is browser-only and has no fallback — don't
+  import it from React Native or Node; it's a separate subpath specifically so you never pay for it
+  there.
 
 ## Browser & runtime support
 
-- Requires `fetch`, `AbortController`, and `Promise` — all standard in any target browser.
+- Requires `fetch`, `AbortController`, and `Promise` — all standard in any target browser (and
+  present in modern Node/React Native too).
 - **IndexedDB** persists the offline queue and form drafts. Where it's unavailable (some SSR
-  contexts, locked-down private-browsing modes), lowdata falls back to an in-memory queue with a
-  console warning instead of throwing — nothing breaks, offline persistence is just unavailable
-  for that session.
+  contexts, locked-down private-browsing modes, React Native/Electron/Node — see above), lowdata
+  falls back to an in-memory queue with a console warning instead of throwing — nothing breaks,
+  offline persistence is just unavailable until you supply a `storage` adapter.
 - **SSR-safe to import**: `createLowdataClient()` and friends never assume `window`/`navigator`
   exist; on the server, connection quality reports `'online'` and nothing touches the DOM.
 
@@ -341,12 +439,15 @@ Sizes below are the unminified ESM build's gzip size — real-world minified siz
 bundler) will be smaller. Each subpath is independently tree-shakeable; you only pay for what you
 import.
 
-| Subpath                                         | gzip (unminified) |
-| ----------------------------------------------- | ----------------- |
-| `lowdata` (core + network + forms)              | ~12.7 KB          |
-| `lowdata/network` alone                         | ~11.5 KB          |
-| `lowdata/media` alone                           | ~2.6 KB           |
-| `lowdata/react` (adds hooks over network+forms) | ~13.2 KB          |
+| Subpath                                                | gzip (unminified) |
+| ------------------------------------------------------- | ----------------- |
+| `lowdata` (core + network + forms)                       | ~14.7 KB          |
+| `lowdata/network` alone                                  | ~13.5 KB          |
+| `lowdata/media` alone                                    | ~3.0 KB           |
+| `lowdata/react` / `vue` / `svelte` / `angular` / `solid` | ~15 KB each        |
+
+Framework subpaths are each a standalone bundle (not a thin diff on top of `lowdata`) — importing
+one doesn't require also fetching the root package separately.
 
 `lowdata/media`'s image compression (the heaviest single feature — canvas resize + iterative
 quality search) is never pulled in by the root import; you opt in explicitly via `lowdata/media`.

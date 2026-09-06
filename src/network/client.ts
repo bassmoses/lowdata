@@ -69,6 +69,8 @@ export class LowdataClient {
   readonly connection: {
     getStatus: () => ConnectionInfo;
     subscribe: (listener: ConnectionListener) => Unsubscribe;
+    /** Manually report connectivity — for React Native (NetInfo), Electron's main process, or Node. */
+    report: (update: Partial<ConnectionInfo>) => ConnectionInfo;
   };
   readonly queue: {
     add: (
@@ -91,7 +93,14 @@ export class LowdataClient {
   };
 
   private monitor: ConnectionMonitor;
-  private storage: StorageAdapter;
+  /**
+   * This client's own persistence backend — the same one its queue uses (IndexedDB by default,
+   * scoped to `namespace` if set; whatever was passed as `config.storage` otherwise). Exposed so
+   * anything built *on top* of a client — `createOfflineForm`'s draft storage, a custom feature —
+   * can share its isolation instead of falling back to one global, unnamespaced store. Low-level:
+   * prefer `client.queue.*` for actual queue operations.
+   */
+  readonly storage: StorageAdapter;
   private requestQueue: RequestQueue;
   private syncManager: SyncManager;
   private syncEmitter = new Emitter<SyncEvent>();
@@ -133,6 +142,7 @@ export class LowdataClient {
     this.connection = {
       getStatus: () => this.monitor.getStatus(),
       subscribe: (listener) => this.monitor.subscribe(listener),
+      report: (update) => this.monitor.reportStatus(update),
     };
     this.queue = {
       add: (item) => this.enqueue(item),
@@ -146,6 +156,19 @@ export class LowdataClient {
 
   onSync(listener: (event: SyncEvent) => void): Unsubscribe {
     return this.syncEmitter.subscribe(listener);
+  }
+
+  /**
+   * Manually trigger a drain of the offline queue. Sync already runs automatically on reconnect
+   * and on a periodic safety poll — both driven by DOM APIs (`window`'s `online` event,
+   * `document.visibilityState`) that don't exist in React Native, Electron's main process, or
+   * plain Node. Call this from whatever *does* signal "we might be back online" there (React
+   * Native's `AppState`, a NetInfo listener, a manual pull-to-refresh) — or pair it with
+   * `connection.report()` so the same reconnect-triggers-drain behavior works unchanged.
+   */
+  async sync(): Promise<void> {
+    if (this.destroyed) return;
+    await this.syncManager.drain();
   }
 
   /**

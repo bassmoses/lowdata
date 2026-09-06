@@ -67,6 +67,19 @@ describe('ConnectionMonitor', () => {
     monitor.destroy();
   });
 
+  it('reportStatus() merges over the last known info and notifies subscribers — for hosts (React Native, Electron main, Node) with no window/navigator.onLine to observe', () => {
+    const monitor = new ConnectionMonitor();
+    const listener = vi.fn();
+    monitor.subscribe(listener);
+
+    const result = monitor.reportStatus({ quality: 'offline', online: false });
+
+    expect(result).toEqual({ quality: 'offline', online: false });
+    expect(monitor.getStatus()).toEqual({ quality: 'offline', online: false });
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({ quality: 'offline' }));
+    monitor.destroy();
+  });
+
   it('stops emitting after destroy()', () => {
     const monitor = new ConnectionMonitor();
     const listener = vi.fn();

@@ -5,9 +5,10 @@ import { setOnline } from '../helpers/dom.js';
 import { resetSharedDb } from '../helpers/db.js';
 import { waitForCondition } from '../helpers/wait.js';
 
-// The client's own queue lives in its own namespace per test (see test/network/client.test.ts for
-// why) — independent of `resetSharedDb()`, which resets the *form drafts* store that
-// `createOfflineForm` always shares via lowdata's default database regardless of client namespace.
+// Each client — and therefore its form drafts too, now that they're routed through the client's
+// own storage adapter rather than one hardcoded shared database — lives in its own namespace per
+// test (see test/network/client.test.ts for why). `resetSharedDb()` is still used for the handful
+// of tests below that deliberately share the *default* client (no namespace given).
 function uniqueNamespace(): string {
   return `offline-form-test-${Math.random()}`;
 }
@@ -205,6 +206,36 @@ describe('createOfflineForm', () => {
     await form.submit({ name: 'Amina' });
     await form.retry();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('two clients in different namespaces never share drafts for the same form id (multi-tenant isolation)', async () => {
+    const suffix = Math.random();
+    const tenantA = createLowdataClient({ namespace: `tenant-a-${suffix}` });
+    const tenantB = createLowdataClient({ namespace: `tenant-b-${suffix}` });
+    try {
+      const formA = createOfflineForm<{ name: string }>({
+        id: 'clinic-intake',
+        endpoint: '/api/patients',
+        client: tenantA,
+      });
+      await formA.save({ name: "Tenant A's patient" });
+
+      // A fresh form for the *same* id, under tenant B's client, must not recover tenant A's draft.
+      const formB = createOfflineForm<{ name: string }>({
+        id: 'clinic-intake',
+        endpoint: '/api/patients',
+        client: tenantB,
+      });
+      // Give any (incorrect) cross-tenant recovery a chance to happen before asserting it didn't.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(formB.getStatus()).toBe('idle');
+
+      formA.destroy();
+      formB.destroy();
+    } finally {
+      tenantA.destroy();
+      tenantB.destroy();
+    }
   });
 
   it('discard() clears the draft and resets status to idle', async () => {
