@@ -429,7 +429,12 @@ describe('SyncManager', () => {
     const { queue, sync } = setup(
       `sync-test-half-open-single-trial-${Math.random()}`,
       { maxRetries: 10, baseDelayMs: 1, maxDelayMs: 1, jitter: 'none' },
-      { syncConcurrency: 5, circuitBreaker: { threshold: 1, cooldownMs: 10 } },
+      // cooldownMs is deliberately generous (not a tight ~10ms) relative to real overhead within a
+      // single drain() loop (several selectEligible()/storage round-trips per iteration): a thin
+      // margin here previously let the *same* drain() call cross the cooldown a second time after
+      // the trial's own failure re-opened the breaker, letting an unrelated extra fetch through and
+      // making this test's pass/fail depend on incidental timing rather than the guarantee itself.
+      { syncConcurrency: 5, circuitBreaker: { threshold: 1, cooldownMs: 500 } },
     );
     let fetchCalls = 0;
     vi.stubGlobal(
@@ -451,7 +456,7 @@ describe('SyncManager', () => {
     await queue.add(makeItem({ id: 'b', url: 'https://api.example.com/b' }));
     await queue.add(makeItem({ id: 'c', url: 'https://api.example.com/c' }));
     await queue.add(makeItem({ id: 'd', url: 'https://api.example.com/d' }));
-    await new Promise((r) => setTimeout(r, 15)); // past cooldownMs: 10
+    await new Promise((r) => setTimeout(r, 550)); // past cooldownMs: 500
     await sync.drain();
 
     // Exactly one more fetch (the trial) — not up to 4 more.

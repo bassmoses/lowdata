@@ -110,45 +110,15 @@ export class SyncManager {
       );
       if (!lock) return; // another tab is already draining, or no lock could be acquired this cycle
 
-      let succeeded = 0;
-      let failed = 0;
       try {
-        await this.opts.queue.sweepStale(STALE_SENDING_MS, Date.now());
+        await this.reconcileQueue(Date.now());
+        if (!(await this.announceStartIfAnythingEligible(Date.now()))) return;
 
-        for (const expired of await this.opts.queue.expireOverdue(Date.now())) {
-          this.opts.onEvent?.({ type: 'item-expired', item: expired });
-        }
-
-        const initialEligible = await this.opts.queue.selectEligible(Date.now());
-        const blockedByDependency = await this.opts.queue.blockedByDependency(Date.now());
-        if (blockedByDependency.length > 0) {
-          this.opts.onEvent?.({
-            type: 'items-blocked',
-            reason: 'dependency',
-            items: blockedByDependency,
-          });
-        }
-        if (initialEligible.length === 0) return;
-        this.opts.onEvent?.({ type: 'sync-start', pending: initialEligible.length });
-
+        let succeeded = 0;
+        let failed = 0;
         while (!this.disposed && this.opts.connection.getStatus().quality !== 'offline') {
-          const eligible = await this.opts.queue.selectEligible(Date.now());
-          if (eligible.length === 0) break;
-
-          const migrated = await this.applyMigrations(eligible);
-          const sendable: QueueItem[] = [];
-          const blockedByBreaker: QueueItem[] = [];
-          for (const item of migrated) {
-            (this.breaker.isOpen(item.url) ? blockedByBreaker : sendable).push(item);
-          }
-          if (blockedByBreaker.length > 0) {
-            this.opts.onEvent?.({
-              type: 'items-blocked',
-              reason: 'circuit-breaker',
-              items: blockedByBreaker,
-            });
-          }
-          if (sendable.length === 0) break; // everything eligible is currently breaker-blocked
+          const sendable = await this.selectSendableBatch();
+          if (!sendable) break; // nothing due, or everything due is currently breaker-blocked
 
           const openedKeys = new Set<string>();
           const batch = sendable.slice(0, this.syncConcurrency);
@@ -176,6 +146,61 @@ export class SyncManager {
     if (this.safetyTimer) clearInterval(this.safetyTimer);
     for (const controller of this.inFlight.values()) controller.abort(CANCELLED);
     this.inFlight.clear();
+  }
+
+  /** Revives crashed-mid-send items and expires overdue ones, before anything is selected to send. */
+  private async reconcileQueue(now: number): Promise<void> {
+    await this.opts.queue.sweepStale(STALE_SENDING_MS, now);
+    for (const expired of await this.opts.queue.expireOverdue(now)) {
+      this.opts.onEvent?.({ type: 'item-expired', item: expired });
+    }
+  }
+
+  /**
+   * Reports any dependency-blocked items (once per drain cycle — unlike breaker-blocks, which can
+   * change every loop iteration), then returns whether there's anything eligible to actually start
+   * draining. Returning `false` means "nothing to do this cycle", not an error.
+   */
+  private async announceStartIfAnythingEligible(now: number): Promise<boolean> {
+    const initialEligible = await this.opts.queue.selectEligible(now);
+    const blockedByDependency = await this.opts.queue.blockedByDependency(now);
+    if (blockedByDependency.length > 0) {
+      this.opts.onEvent?.({
+        type: 'items-blocked',
+        reason: 'dependency',
+        items: blockedByDependency,
+      });
+    }
+    if (initialEligible.length === 0) return false;
+    this.opts.onEvent?.({ type: 'sync-start', pending: initialEligible.length });
+    return true;
+  }
+
+  /**
+   * One drain-loop iteration's worth of items actually ready to send right now: due, migrated to
+   * the current schema, and not currently withheld by an open circuit breaker (reported via
+   * `items-blocked` here, since which items are breaker-blocked can change every iteration as
+   * breakers open/close). `null` means the loop should stop — either nothing is due at all, or
+   * everything that's due is blocked.
+   */
+  private async selectSendableBatch(): Promise<QueueItem[] | null> {
+    const eligible = await this.opts.queue.selectEligible(Date.now());
+    if (eligible.length === 0) return null;
+
+    const migrated = await this.applyMigrations(eligible);
+    const sendable: QueueItem[] = [];
+    const blockedByBreaker: QueueItem[] = [];
+    for (const item of migrated) {
+      (this.breaker.isOpen(item.url) ? blockedByBreaker : sendable).push(item);
+    }
+    if (blockedByBreaker.length > 0) {
+      this.opts.onEvent?.({
+        type: 'items-blocked',
+        reason: 'circuit-breaker',
+        items: blockedByBreaker,
+      });
+    }
+    return sendable.length > 0 ? sendable : null;
   }
 
   /**
