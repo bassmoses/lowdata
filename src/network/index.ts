@@ -7,6 +7,7 @@ export type {
   SyncEvent,
   LowdataClientConfig,
   EncryptionHooks,
+  CapturedResponse,
 } from './types.js';
 export { isQueued } from './types.js';
 export { LowdataClient, createLowdataClient } from './client.js';
@@ -35,5 +36,7 @@ export {
   createMemoryStorageAdapter,
 } from '../core/storageAdapter.js';
 export type { StorageAdapter, IndexedDbStorageAdapterOptions } from '../core/storageAdapter.js';
+export { createAsyncStorageAdapter } from '../core/asyncStorageAdapter.js';
+export type { AsyncStorageLike } from '../core/asyncStorageAdapter.js';
 export { createQueueBroadcast } from '../core/broadcast.js';
 export type { QueueBroadcast } from '../core/broadcast.js';

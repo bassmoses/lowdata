@@ -235,6 +235,26 @@ createLowdataClient({
 `QueueItem.idempotencyKey`) by default, whether it ends up sent live or queued — have your backend
 dedupe on it. Opt out with `autoIdempotencyKey: false`, or supply your own via `idempotencyKey`.
 
+**Inspecting a queued write's actual outcome** — `item-success` only tells you the request got a
+2xx; it doesn't, by default, tell you _what the server actually said_. That distinction matters
+when a 200 can mean two different things — e.g. a ticket-check-in endpoint returning
+`{ status: 'ALREADY_SCANNED' }` with an HTTP 200, because a different device already checked this
+same ticket in while both were offline. Opt in to see it:
+
+```ts
+createLowdataClient({ captureResponseBody: true });
+
+client.onSync((event) => {
+  if (event.type === 'item-success' && event.response?.body?.status === 'ALREADY_SCANNED') {
+    // handle the business-level conflict — this was never a "failure" to retry
+  }
+});
+```
+
+Off by default (reading a body has a real memory cost most apps never need); bodies over
+`captureResponseBodyMaxBytes` (default 100 KB) are skipped — only `status` is captured, never the
+full body.
+
 ### Retry & backoff
 
 ```ts
@@ -389,12 +409,21 @@ single-tenant apps, but always pass your tenant's `client` explicitly in a multi
 The core has no built-in adapter for these — no runtime dependency is added on your behalf — but
 every extension point needed to run there is already exposed:
 
-- **Storage**: React Native/Electron's main process/Node have no `indexedDB`. Supply your own
-  `StorageAdapter` (SQLite, AsyncStorage, anything with `put`/`get`/`getAll`/`delete`/`clear`/`count`)
-  instead of relying on the automatic in-memory fallback:
+- **Storage**: React Native/Electron's main process/Node have no `indexedDB`. For React Native,
+  `createAsyncStorageAdapter` ships a ready-made `StorageAdapter` over
+  `@react-native-async-storage/async-storage` (or anything with the same four methods) — no peer
+  dependency added, since it's described structurally rather than imported:
   ```ts
-  createLowdataClient({ storage: myAsyncStorageAdapter });
+  import AsyncStorage from '@react-native-async-storage/async-storage';
+  import { createLowdataClient, createAsyncStorageAdapter } from 'lowdata';
+
+  createLowdataClient({ storage: createAsyncStorageAdapter(AsyncStorage, `event-${eventId}`) });
+  // the second argument namespaces the same way `namespace` does on the web — isolate a shared
+  // device's data per event/organizer/tenant instead of one global queue.
   ```
+  For Electron's main process or a Node backend, implement `StorageAdapter` directly (five methods:
+  `put`/`get`/`getAll`/`delete`/`clear`/`count`) over SQLite or anything else — or fall back to the
+  automatic in-memory adapter for a session with no persistence needs.
 - **Connectivity**: without a DOM `window`, lowdata can't hear a browser `online`/`offline` event.
   Feed it your own signal — React Native's `NetInfo`, Electron's own reachability check — and the
   existing reconnect-triggers-a-drain behavior works unchanged:

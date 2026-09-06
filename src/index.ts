@@ -38,7 +38,10 @@ export type {
   StorageAdapter,
   IndexedDbStorageAdapterOptions,
   CircuitBreakerConfig,
+  CapturedResponse,
 } from './network/index.js';
+export { createAsyncStorageAdapter } from './core/asyncStorageAdapter.js';
+export type { AsyncStorageLike } from './core/asyncStorageAdapter.js';
 
 export { createOfflineForm } from './forms/index.js';
 export type {

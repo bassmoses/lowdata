@@ -1,8 +1,32 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createAsyncStorageAdapter } from '../../src/core/asyncStorageAdapter.js';
+import type { AsyncStorageLike } from '../../src/core/asyncStorageAdapter.js';
 import { createLowdataClient, type LowdataClient } from '../../src/network/client.js';
 import { isQueued } from '../../src/network/types.js';
 import { setOnline } from '../helpers/dom.js';
 import { waitForCondition } from '../helpers/wait.js';
+
+/** In-memory double for @react-native-async-storage/async-storage — see test/core/asyncStorageAdapter.test.ts. */
+function createFakeAsyncStorage(): AsyncStorageLike {
+  const store = new Map<string, string>();
+  return {
+    async getItem(key) {
+      return store.has(key) ? store.get(key)! : null;
+    },
+    async setItem(key, value) {
+      store.set(key, value);
+    },
+    async removeItem(key) {
+      store.delete(key);
+    },
+    async getAllKeys() {
+      return Array.from(store.keys());
+    },
+    async multiRemove(keys) {
+      for (const key of keys) store.delete(key);
+    },
+  };
+}
 
 // Every test gets its own IndexedDB namespace (a fresh physical database) rather than sharing
 // lowdata's default database and resetting it between tests. That sidesteps IndexedDB's own
@@ -296,5 +320,25 @@ describe('LowdataClient', () => {
     }
     const listed = (await client.queue.list())[0];
     expect(listed?.body).toBe(JSON.stringify({ amount: 42 }));
+  });
+
+  it('works end-to-end against a supplied AsyncStorage-shaped adapter (the React Native path)', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    client = createLowdataClient({ storage: createAsyncStorageAdapter(createFakeAsyncStorage()) });
+
+    // No window/DOM offline event to rely on here on purpose — this exercises the same path a
+    // React Native host actually has: no IndexedDB, and connectivity fed in via connection.report()
+    // rather than a browser event (see the connection.report() test above).
+    client.connection.report({ quality: 'offline', online: false });
+    const result = await client.fetch('/api/checkin', { method: 'POST', body: '{}' });
+    expect(isQueued(result)).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    client.connection.report({ quality: 'online', online: true });
+    await waitForCondition(() => fetchMock.mock.calls.length > 0, {
+      message: 'expected the queued check-in to sync once reported online',
+    });
+    expect(await client.queue.list()).toHaveLength(0);
   });
 });

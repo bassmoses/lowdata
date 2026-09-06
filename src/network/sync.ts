@@ -13,7 +13,9 @@ import type { CircuitBreakerConfig } from './circuitBreaker.js';
 import { LowdataRequestError } from './errors.js';
 import { DEFAULT_TIMEOUT_MS, defaultRetryOn, parseRetryAfterMs } from './retry.js';
 import type { RequestQueue } from './queue.js';
-import type { QueueItem, SyncEvent } from './types.js';
+import type { CapturedResponse, QueueItem, SyncEvent } from './types.js';
+
+const DEFAULT_CAPTURE_RESPONSE_BODY_MAX_BYTES = 100_000; // 100 KB
 
 /** Items stuck in `sending` longer than this are assumed crashed and revived to `pending`. */
 const STALE_SENDING_MS = 60_000;
@@ -34,6 +36,8 @@ export interface SyncManagerOptions {
   circuitBreaker?: CircuitBreakerConfig;
   schemaVersion?: number;
   migrateQueueItem?: (item: QueueItem) => QueueItem;
+  captureResponseBody?: boolean;
+  captureResponseBodyMaxBytes?: number;
   onEvent?: (event: SyncEvent) => void;
   onError?: LowdataErrorHandler;
 }
@@ -174,6 +178,34 @@ export class SyncManager {
     this.inFlight.clear();
   }
 
+  /**
+   * Reads and (best-effort) parses a response body for `CapturedResponse` — never throws: a
+   * malformed body or a read failure still yields `{ status }` rather than losing the whole event.
+   * Bodies over the configured size limit are skipped entirely (only `status` is captured) so one
+   * huge response can't balloon memory just because capture is enabled.
+   */
+  private async captureResponse(response: Response): Promise<CapturedResponse> {
+    const maxBytes =
+      this.opts.captureResponseBodyMaxBytes ?? DEFAULT_CAPTURE_RESPONSE_BODY_MAX_BYTES;
+    try {
+      const text = await response.text();
+      // Byte length, not string length — a UTF-16 code-unit count would understate real size for
+      // any non-ASCII body, letting past exactly the multi-byte content this cap exists to catch.
+      if (!text || new Blob([text]).size > maxBytes) return { status: response.status };
+      const contentType = response.headers.get('content-type') ?? '';
+      if (contentType.includes('json')) {
+        try {
+          return { status: response.status, body: JSON.parse(text) };
+        } catch {
+          return { status: response.status, body: text };
+        }
+      }
+      return { status: response.status, body: text };
+    } catch {
+      return { status: response.status };
+    }
+  }
+
   /** Upgrades any item whose `schemaVersion` predates the current one before it's sent. */
   private async applyMigrations(items: QueueItem[]): Promise<QueueItem[]> {
     const targetVersion = this.opts.schemaVersion;
@@ -212,6 +244,7 @@ export class SyncManager {
         : item.headers;
 
       let requestError: LowdataRequestError | undefined;
+      let capturedResponse: CapturedResponse | undefined;
       try {
         const response = await fetch(item.url, {
           method: item.method,
@@ -219,6 +252,9 @@ export class SyncManager {
           body: item.body ?? undefined,
           signal: controller.signal,
         });
+        if (this.opts.captureResponseBody) {
+          capturedResponse = await this.captureResponse(response);
+        }
         // Only a genuine 2xx counts as delivered. Anything else — including a status this queue
         // doesn't consider retryable, like a 400, 404, 500, or the 505 that prompted this review —
         // falls through to the shared failure/retry handling below instead of being purged as
@@ -229,9 +265,11 @@ export class SyncManager {
           const doneItem: QueueItem = { ...sendingItem, status: 'done', updatedAt: Date.now() };
           // Terminal and successful — nothing more to do with it, so purge rather than let a
           // long-lived app's queue store grow forever. The event still carries the final item for
-          // any subscriber that wants to build its own history.
+          // any subscriber that wants to build its own history. `response` matters here precisely
+          // because "2xx" and "actually a fresh success, not a business-level duplicate/conflict
+          // the server chose to report with a 200" are two different things — see `CapturedResponse`.
           await this.opts.queue.remove(doneItem.id);
-          this.opts.onEvent?.({ type: 'item-success', item: doneItem });
+          this.opts.onEvent?.({ type: 'item-success', item: doneItem, response: capturedResponse });
           this.breaker.recordSuccess(item.url);
           return true;
         }
@@ -281,7 +319,12 @@ export class SyncManager {
         updatedAt: Date.now(),
       };
       await this.opts.queue.update(resultItem);
-      this.opts.onEvent?.({ type: 'item-failed', item: resultItem, willRetry });
+      this.opts.onEvent?.({
+        type: 'item-failed',
+        item: resultItem,
+        willRetry,
+        response: capturedResponse,
+      });
       return false;
     } finally {
       clearTimeout(timer);

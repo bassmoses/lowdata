@@ -129,6 +129,8 @@ export class LowdataClient {
       circuitBreaker: config.circuitBreaker,
       schemaVersion: config.schemaVersion,
       migrateQueueItem: config.migrateQueueItem,
+      captureResponseBody: config.captureResponseBody,
+      captureResponseBodyMaxBytes: config.captureResponseBodyMaxBytes,
       onEvent: (event) => {
         this.syncEmitter.emit(event);
         this.broadcast.post();

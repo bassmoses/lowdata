@@ -55,6 +55,100 @@ describe('SyncManager', () => {
     connection.destroy();
   });
 
+  it('does not capture the response body by default', async () => {
+    const { queue, sync, events } = setup(`sync-test-capture-off-${Math.random()}`);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ status: 'ALREADY_SCANNED' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+
+    await queue.add(makeItem());
+    await sync.drain();
+
+    const successEvent = events.find((e) => e.type === 'item-success');
+    expect(successEvent?.type === 'item-success' && successEvent.response).toBeUndefined();
+    sync.destroy();
+  });
+
+  it('captures a parsed JSON response body on item-success when captureResponseBody is enabled', async () => {
+    const { queue, sync, events } = setup(`sync-test-capture-json-${Math.random()}`, undefined, {
+      captureResponseBody: true,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ status: 'ALREADY_SCANNED' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+
+    await queue.add(makeItem());
+    await sync.drain();
+
+    const successEvent = events.find((e) => e.type === 'item-success');
+    expect(successEvent?.type === 'item-success' && successEvent.response).toEqual({
+      status: 200,
+      body: { status: 'ALREADY_SCANNED' },
+    });
+    sync.destroy();
+  });
+
+  it('captures the response on item-failed too, when the server actually responded (not a network error)', async () => {
+    const { queue, sync, events } = setup(
+      `sync-test-capture-failed-${Math.random()}`,
+      { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1, jitter: 'none' },
+      { captureResponseBody: true },
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: 'invalid ticket' }), {
+            status: 400,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+
+    await queue.add(makeItem());
+    await sync.drain();
+
+    const failedEvent = events.find((e) => e.type === 'item-failed');
+    expect(failedEvent?.type === 'item-failed' && failedEvent.response).toEqual({
+      status: 400,
+      body: { error: 'invalid ticket' },
+    });
+    sync.destroy();
+  });
+
+  it('falls back to raw text for a non-JSON response, and skips the body entirely past the size cap', async () => {
+    const { queue, sync, events } = setup(`sync-test-capture-text-${Math.random()}`, undefined, {
+      captureResponseBody: true,
+      captureResponseBodyMaxBytes: 10,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response('this response body is way over ten bytes', { status: 200 })),
+    );
+
+    await queue.add(makeItem());
+    await sync.drain();
+
+    const successEvent = events.find((e) => e.type === 'item-success');
+    // Over the 10-byte cap — only status is captured, not the body.
+    expect(successEvent?.type === 'item-success' && successEvent.response).toEqual({ status: 200 });
+    sync.destroy();
+  });
+
   it("attaches the item's idempotencyKey as an Idempotency-Key header when sending", async () => {
     const { queue, sync } = setup(`sync-test-idem-${Math.random()}`);
     const sentHeaders: Array<Record<string, string> | undefined> = [];

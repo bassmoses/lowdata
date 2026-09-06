@@ -68,11 +68,27 @@ export function isQueued(result: Response | QueuedResult): result is QueuedResul
   return typeof result === 'object' && result !== null && (result as QueuedResult).queued === true;
 }
 
+/**
+ * The server's actual response to a queued item, captured only when `captureResponseBody` is
+ * enabled. Exists for exactly one reason: a request that finishes *successfully* (2xx) in the
+ * background can still carry business-meaningful information in its body — e.g. a ticket-check-in
+ * endpoint returning `{ status: 'ALREADY_SCANNED' }` with an HTTP 200 because a different,
+ * previously-offline device already checked this same ticket in. Without this, that distinction
+ * is invisible: `item-success` fires either way, and there's no route to the response body for a
+ * request that was replayed in the background, unlike a live `client.fetch()` call where the
+ * caller already holds the `Response` directly.
+ */
+export interface CapturedResponse {
+  status: number;
+  /** Parsed JSON if the response declared `application/json`; otherwise raw text. `undefined` if the body was empty or exceeded the capture size limit. */
+  body?: unknown;
+}
+
 export type SyncEvent =
   | { type: 'sync-start'; pending: number }
   | { type: 'item-start'; item: QueueItem }
-  | { type: 'item-success'; item: QueueItem }
-  | { type: 'item-failed'; item: QueueItem; willRetry: boolean }
+  | { type: 'item-success'; item: QueueItem; response?: CapturedResponse }
+  | { type: 'item-failed'; item: QueueItem; willRetry: boolean; response?: CapturedResponse }
   | { type: 'item-expired'; item: QueueItem }
   | { type: 'circuit-open'; key: string }
   /**
@@ -145,4 +161,16 @@ export interface LowdataClientConfig {
    * server-side by default. Default `true`.
    */
   autoIdempotencyKey?: boolean;
+  /**
+   * Capture the response body (parsed JSON, or raw text) on `item-success`/`item-failed` events
+   * for queued items — see `CapturedResponse`. Off by default: reading a response body has a real
+   * cost (buffers the whole thing into memory) that most apps never need, since most queued
+   * writes only care whether they succeeded, not what came back. Turn this on when a background
+   * sync outcome needs to be inspected, not just observed — e.g. distinguishing a genuine success
+   * from a 200 that actually means "someone else already did this". Bodies larger than
+   * `captureResponseBodyMaxBytes` (default 100 KB) are skipped (only `status` is captured) rather
+   * than buffered in full.
+   */
+  captureResponseBody?: boolean;
+  captureResponseBodyMaxBytes?: number;
 }
