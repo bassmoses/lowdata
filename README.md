@@ -235,6 +235,22 @@ createLowdataClient({
 `QueueItem.idempotencyKey`) by default, whether it ends up sent live or queued — have your backend
 dedupe on it. Opt out with `autoIdempotencyKey: false`, or supply your own via `idempotencyKey`.
 
+**Refreshing stale auth headers** — a queue item's `headers` are otherwise frozen at enqueue time:
+a bearer token captured while the app was last online can expire during a long offline stretch, and
+every replay would then 401 forever with no recovery short of a manual `queue.retry()` after
+re-auth. `resolveHeaders` is called fresh immediately before _every_ send attempt of a queued item
+— including a retry firing hours after the item was first enqueued — and its result is merged over
+that item's stored headers (`Idempotency-Key` still layers on top of both, unchanged):
+
+```ts
+createLowdataClient({
+  resolveHeaders: async () => ({ Authorization: `Bearer ${await getFreshAccessToken()}` }),
+});
+```
+
+Only applies to background sends from the queue — a live `client.fetch()` call already carries the
+caller's current headers, so there's nothing to refresh there.
+
 **Inspecting a queued write's actual outcome** — `item-success` only tells you the request got a
 2xx; it doesn't, by default, tell you _what the server actually said_. That distinction matters
 when a 200 can mean two different things — e.g. a ticket-check-in endpoint returning

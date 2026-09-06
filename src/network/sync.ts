@@ -38,6 +38,8 @@ export interface SyncManagerOptions {
   migrateQueueItem?: (item: QueueItem) => QueueItem;
   captureResponseBody?: boolean;
   captureResponseBodyMaxBytes?: number;
+  /** See `LowdataClientConfig.resolveHeaders` — called fresh before every queued send attempt. */
+  resolveHeaders?: () => Record<string, string> | Promise<Record<string, string>>;
   onEvent?: (event: SyncEvent) => void;
   onError?: LowdataErrorHandler;
 }
@@ -247,6 +249,18 @@ export class SyncManager {
     );
   }
 
+  /**
+   * Records an explicitly cancelled send (via `queue.cancel()`) as terminal — shared by both the
+   * `resolveHeaders()` and `fetch()` failure paths in `sendItem()`, since a cancellation can land
+   * while either one is in flight.
+   */
+  private async markCancelled(sendingItem: QueueItem): Promise<false> {
+    const cancelledItem: QueueItem = { ...sendingItem, status: 'cancelled', updatedAt: Date.now() };
+    await this.opts.queue.update(cancelledItem);
+    this.opts.onEvent?.({ type: 'item-failed', item: cancelledItem, willRetry: false });
+    return false;
+  }
+
   private async sendItem(item: QueueItem, openedKeys: Set<string>): Promise<boolean> {
     const controller = new AbortController();
     this.inFlight.set(item.id, controller);
@@ -264,65 +278,92 @@ export class SyncManager {
 
       const retryConfig = { ...this.retryConfig, ...item.retry };
       const retryOn = retryConfig.retryOn ?? defaultRetryOn;
-      const headers = item.idempotencyKey
-        ? { ...item.headers, 'Idempotency-Key': item.idempotencyKey }
-        : item.headers;
 
       let requestError: LowdataRequestError | undefined;
       let capturedResponse: CapturedResponse | undefined;
+      let headers: Record<string, string> | undefined;
       try {
-        const response = await fetch(item.url, {
-          method: item.method,
-          headers,
-          body: item.body ?? undefined,
-          signal: controller.signal,
-        });
-        const shouldCapture = item.captureResponseBody ?? this.opts.captureResponseBody;
-        if (shouldCapture) {
-          capturedResponse = await this.captureResponse(response);
-        }
-        // Only a genuine 2xx counts as delivered. Anything else — including a status this queue
-        // doesn't consider retryable, like a 400, 404, 500, or the 505 that prompted this review —
-        // falls through to the shared failure/retry handling below instead of being purged as
-        // 'done'. There's no caller here to hand a non-ok Response back to for inspection (unlike
-        // the live `client.fetch()` path); treating "not retryable" as "successful" would silently
-        // report a hard server-side rejection as a sync success and delete the only record of it.
-        if (response.ok) {
-          const doneItem: QueueItem = { ...sendingItem, status: 'done', updatedAt: Date.now() };
-          // Terminal and successful — nothing more to do with it, so purge rather than let a
-          // long-lived app's queue store grow forever. The event still carries the final item for
-          // any subscriber that wants to build its own history. `response` matters here precisely
-          // because "2xx" and "actually a fresh success, not a business-level duplicate/conflict
-          // the server chose to report with a 200" are two different things — see `CapturedResponse`.
-          await this.opts.queue.remove(doneItem.id);
-          this.opts.onEvent?.({ type: 'item-success', item: doneItem, response: capturedResponse });
-          this.breaker.recordSuccess(item.url);
-          return true;
-        }
-        requestError = new LowdataRequestError(`Request failed with status ${response.status}`, {
-          status: response.status,
-          attempt: item.attempts,
-          retryAfterMs: parseRetryAfterMs(response),
-        });
+        // Re-asked on every attempt, not just the first — a bearer token frozen into `item.headers`
+        // at enqueue time can expire during a long offline stretch, and without this a queued item
+        // would 401 on every replay with no way to recover short of a manual queue.retry() after
+        // re-auth. Layered under `item.headers` so a caller can still hard-pin a header per item if
+        // they need to; `Idempotency-Key` always layers on top of both, unchanged.
+        const resolved = this.opts.resolveHeaders ? await this.opts.resolveHeaders() : undefined;
+        headers = {
+          ...item.headers,
+          ...resolved,
+          ...(item.idempotencyKey ? { 'Idempotency-Key': item.idempotencyKey } : {}),
+        };
       } catch (cause) {
-        if (controller.signal.reason === CANCELLED) {
-          const cancelledItem: QueueItem = {
-            ...sendingItem,
-            status: 'cancelled',
-            updatedAt: Date.now(),
-          };
-          await this.opts.queue.update(cancelledItem);
-          this.opts.onEvent?.({ type: 'item-failed', item: cancelledItem, willRetry: false });
-          return false;
+        // Treated exactly like a failed fetch: retried with the same backoff, never left to crash
+        // the whole batch this item's send was scheduled alongside (see the try/finally note above).
+        requestError = new LowdataRequestError('Failed to resolve headers before sending', {
+          isNetworkError: true,
+          attempt: item.attempts,
+          cause,
+        });
+      }
+
+      // A queue.cancel() can land at any point while resolveHeaders() was in flight — unlike
+      // fetch(), that call isn't wired to `controller.signal`, so cancellation wouldn't otherwise
+      // surface until here. Check before falling through to the shared retry logic below: without
+      // this, a resolveHeaders() rejection racing a cancel() would overwrite the 'cancelled' status
+      // the app just wrote with a fresh 'pending'/'failed' one, silently reviving a cancelled item.
+      if (controller.signal.reason === CANCELLED) return this.markCancelled(sendingItem);
+
+      // Skipped entirely when resolveHeaders() already failed above — requestError is already set,
+      // and falling through to the shared retry/backoff handling below (rather than attempting a
+      // fetch with incomplete headers) is exactly the point.
+      if (!requestError) {
+        try {
+          const response = await fetch(item.url, {
+            method: item.method,
+            headers,
+            body: item.body ?? undefined,
+            signal: controller.signal,
+          });
+          const shouldCapture = item.captureResponseBody ?? this.opts.captureResponseBody;
+          if (shouldCapture) {
+            capturedResponse = await this.captureResponse(response);
+          }
+          // Only a genuine 2xx counts as delivered. Anything else — including a status this queue
+          // doesn't consider retryable, like a 400, 404, 500, or the 505 that prompted this review —
+          // falls through to the shared failure/retry handling below instead of being purged as
+          // 'done'. There's no caller here to hand a non-ok Response back to for inspection (unlike
+          // the live `client.fetch()` path); treating "not retryable" as "successful" would silently
+          // report a hard server-side rejection as a sync success and delete the only record of it.
+          if (response.ok) {
+            const doneItem: QueueItem = { ...sendingItem, status: 'done', updatedAt: Date.now() };
+            // Terminal and successful — nothing more to do with it, so purge rather than let a
+            // long-lived app's queue store grow forever. The event still carries the final item for
+            // any subscriber that wants to build its own history. `response` matters here precisely
+            // because "2xx" and "actually a fresh success, not a business-level duplicate/conflict
+            // the server chose to report with a 200" are two different things — see `CapturedResponse`.
+            await this.opts.queue.remove(doneItem.id);
+            this.opts.onEvent?.({
+              type: 'item-success',
+              item: doneItem,
+              response: capturedResponse,
+            });
+            this.breaker.recordSuccess(item.url);
+            return true;
+          }
+          requestError = new LowdataRequestError(`Request failed with status ${response.status}`, {
+            status: response.status,
+            attempt: item.attempts,
+            retryAfterMs: parseRetryAfterMs(response),
+          });
+        } catch (cause) {
+          if (controller.signal.reason === CANCELLED) return this.markCancelled(sendingItem);
+          // Genuinely never reaching the server (offline mid-send, DNS failure, connection refused)
+          // never aborts our own controller — only our timeout does — so this correctly falls to
+          // isNetworkError rather than isTimeout for "never reached the server" specifically.
+          const isTimeout = controller.signal.aborted && controller.signal.reason !== CANCELLED;
+          requestError = new LowdataRequestError(
+            isTimeout ? 'Request timed out' : 'Network request failed',
+            { isNetworkError: !isTimeout, isTimeout, attempt: item.attempts, cause },
+          );
         }
-        // Genuinely never reaching the server (offline mid-send, DNS failure, connection refused)
-        // never aborts our own controller — only our timeout does — so this correctly falls to
-        // isNetworkError rather than isTimeout for "never reached the server" specifically.
-        const isTimeout = controller.signal.aborted && controller.signal.reason !== CANCELLED;
-        requestError = new LowdataRequestError(
-          isTimeout ? 'Request timed out' : 'Network request failed',
-          { isNetworkError: !isTimeout, isTimeout, attempt: item.attempts, cause },
-        );
       }
 
       const justOpened = this.breaker.recordFailure(item.url);

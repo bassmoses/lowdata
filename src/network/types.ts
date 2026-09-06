@@ -178,4 +178,15 @@ export interface LowdataClientConfig {
    */
   captureResponseBody?: boolean;
   captureResponseBodyMaxBytes?: number;
+  /**
+   * Called fresh immediately before *every* send attempt of a queued item — including a retry that
+   * fires hours after the item was originally enqueued — and merged over that item's stored
+   * headers (`Idempotency-Key` injection still layers on top of this, unchanged). Exists because a
+   * queue item's `headers` are otherwise frozen at enqueue time: without this, a bearer token
+   * captured when the app was last online can expire during a long offline stretch, and every
+   * replay attempt 401s with no way to recover except a manual `queue.retry()` after re-auth.
+   * Not used for the *live* `client.fetch()` attempt (that call already has the caller's current
+   * headers) — only for a background send from the queue, where "current" has to be re-asked.
+   */
+  resolveHeaders?: () => Record<string, string> | Promise<Record<string, string>>;
 }

@@ -228,6 +228,108 @@ describe('SyncManager', () => {
     sync.destroy();
   });
 
+  it('calls resolveHeaders() fresh on every send attempt and uses its latest result, not a value frozen at enqueue time', async () => {
+    let token = 'stale-token';
+    // A large baseDelayMs keeps the rescheduled item's nextAttemptAt safely in the future, so the
+    // retry only happens once we force it below — same convention as the backoff test above.
+    const { queue, sync } = setup(
+      `sync-test-resolve-headers-${Math.random()}`,
+      { maxRetries: 2, baseDelayMs: 60_000, maxDelayMs: 60_000, jitter: 'none' },
+      { resolveHeaders: () => ({ Authorization: `Bearer ${token}` }) },
+    );
+    const sentHeaders: Array<Record<string, string> | undefined> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        sentHeaders.push(init?.headers as Record<string, string> | undefined);
+        // Fails the first attempt with a retryable status, succeeds once a fresh token is in hand —
+        // proving resolveHeaders() is re-asked on the retry, not just used once at first send.
+        return sentHeaders.length === 1
+          ? new Response(null, { status: 503 })
+          : new Response(null, { status: 200 });
+      }),
+    );
+
+    const item = await queue.add(makeItem({ headers: { Authorization: 'Bearer stale-token' } }));
+    await sync.drain();
+    expect(sentHeaders[0]?.['Authorization']).toBe('Bearer stale-token');
+
+    token = 'fresh-token';
+    await queue.update({ ...(await queue.get(item.id))!, nextAttemptAt: Date.now() });
+    await sync.drain();
+    expect(sentHeaders[1]?.['Authorization']).toBe('Bearer fresh-token');
+
+    sync.destroy();
+  });
+
+  it('layers resolveHeaders() under item.headers and Idempotency-Key on top of both', async () => {
+    const { queue, sync } = setup(
+      `sync-test-resolve-headers-layering-${Math.random()}`,
+      undefined,
+      { resolveHeaders: () => ({ Authorization: 'Bearer fresh', 'X-From-Resolver': '1' }) },
+    );
+    const sentHeaders: Array<Record<string, string> | undefined> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        sentHeaders.push(init?.headers as Record<string, string> | undefined);
+        return new Response(null, { status: 200 });
+      }),
+    );
+
+    await queue.add(
+      makeItem({
+        headers: { Authorization: 'Bearer stale', 'X-Static': 'yes' },
+        idempotencyKey: 'idem-456',
+      }),
+    );
+    await sync.drain();
+
+    expect(sentHeaders[0]).toEqual({
+      Authorization: 'Bearer fresh', // resolveHeaders() wins over item.headers
+      'X-Static': 'yes', // untouched item.headers pass through
+      'X-From-Resolver': '1',
+      'Idempotency-Key': 'idem-456', // still layered on top of everything
+    });
+    sync.destroy();
+  });
+
+  it('treats a resolveHeaders() rejection as a retryable failure, without ever calling fetch()', async () => {
+    let shouldFail = true;
+    // Large baseDelayMs, same convention as the backoff test above — the retry is forced explicitly
+    // below rather than raced against a real (tiny) backoff delay.
+    const { queue, sync, events } = setup(
+      `sync-test-resolve-headers-throws-${Math.random()}`,
+      { maxRetries: 2, baseDelayMs: 60_000, maxDelayMs: 60_000, jitter: 'none' },
+      {
+        resolveHeaders: () => {
+          if (shouldFail) throw new Error('token refresh failed');
+          return { Authorization: 'Bearer recovered' };
+        },
+      },
+    );
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const item = await queue.add(makeItem());
+    await sync.drain();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const failedEvent = events.find((e) => e.type === 'item-failed');
+    expect(failedEvent?.type === 'item-failed' && failedEvent.willRetry).toBe(true);
+    expect(failedEvent?.type === 'item-failed' && failedEvent.item.lastError).toContain(
+      'Failed to resolve headers before sending',
+    );
+
+    shouldFail = false;
+    await queue.update({ ...(await queue.get(item.id))!, nextAttemptAt: Date.now() });
+    await sync.drain();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await queue.list()).toHaveLength(0); // succeeded once the resolver recovered, and was purged
+
+    sync.destroy();
+  });
+
   it('does not double-send when drain() is called twice concurrently in the same tick', async () => {
     const { queue, sync } = setup(`sync-test-concurrent-${Math.random()}`);
     let callCount = 0;
@@ -514,6 +616,42 @@ describe('SyncManager', () => {
 
     const updated = await queue.get(item.id);
     expect(updated?.status).toBe('cancelled');
+    sync.destroy();
+  });
+
+  it('a cancel() landing while resolveHeaders() is in flight still ends in cancelled, even if resolveHeaders() then rejects', async () => {
+    // resolveHeaders() isn't wired to the item's AbortController the way fetch() is, so a cancel()
+    // arriving mid-resolveHeaders() has to be caught explicitly — otherwise a resolveHeaders()
+    // rejection landing afterward would fall through to the shared retry logic and overwrite the
+    // 'cancelled' status that queue.cancel() just wrote with a fresh 'pending'/'failed' one.
+    let resolveHeadersCalled = false;
+    let rejectResolveHeaders!: (reason: unknown) => void;
+    const { queue, sync } = setup(
+      `sync-test-cancel-during-resolve-headers-${Math.random()}`,
+      undefined,
+      {
+        resolveHeaders: () =>
+          new Promise((_resolve, reject) => {
+            resolveHeadersCalled = true;
+            rejectResolveHeaders = reject;
+          }),
+      },
+    );
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const item = await queue.add(makeItem());
+    const drainPromise = sync.drain();
+    await waitForCondition(() => resolveHeadersCalled, {
+      message: 'expected resolveHeaders() to have been called',
+    });
+    sync.cancel(item.id);
+    rejectResolveHeaders(new Error('token refresh failed'));
+    await drainPromise;
+
+    const updated = await queue.get(item.id);
+    expect(updated?.status).toBe('cancelled');
+    expect(fetchMock).not.toHaveBeenCalled(); // cancelled before resolveHeaders() even settled
     sync.destroy();
   });
 

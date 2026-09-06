@@ -131,6 +131,7 @@ export class LowdataClient {
       migrateQueueItem: config.migrateQueueItem,
       captureResponseBody: config.captureResponseBody,
       captureResponseBodyMaxBytes: config.captureResponseBodyMaxBytes,
+      resolveHeaders: config.resolveHeaders,
       onEvent: (event) => {
         this.syncEmitter.emit(event);
         this.broadcast.post();
