@@ -43,6 +43,8 @@ export interface QueueItem {
   schemaVersion?: number;
   /** Set internally when `LowdataClientConfig.encryption` is configured — do not set this by hand. */
   bodyEncrypted?: boolean;
+  /** Overrides `LowdataClientConfig.captureResponseBody` for this item only — e.g. capture it for a check-in endpoint but not for everything else queued. */
+  captureResponseBody?: boolean;
 }
 
 export interface EnqueueOptions {
@@ -55,6 +57,7 @@ export interface EnqueueOptions {
   forceQueue?: boolean;
   dependsOn?: string[];
   maxAgeMs?: number;
+  captureResponseBody?: boolean;
 }
 
 /** Result returned by `client.fetch()` when a request could not be sent live and was queued instead. */
@@ -162,9 +165,11 @@ export interface LowdataClientConfig {
    */
   autoIdempotencyKey?: boolean;
   /**
-   * Capture the response body (parsed JSON, or raw text) on `item-success`/`item-failed` events
-   * for queued items — see `CapturedResponse`. Off by default: reading a response body has a real
-   * cost (buffers the whole thing into memory) that most apps never need, since most queued
+   * Default for whether to capture the response body (parsed JSON, or raw text) on
+   * `item-success`/`item-failed` events for queued items — see `CapturedResponse`. Overridable per
+   * item via `EnqueueOptions`/`QueueItem`, so (for example) only a check-in endpoint pays the cost
+   * of capture while everything else queued doesn't. Off by default: reading a response body has a
+   * real cost (buffers the whole thing into memory) that most apps never need, since most queued
    * writes only care whether they succeeded, not what came back. Turn this on when a background
    * sync outcome needs to be inspected, not just observed — e.g. distinguishing a genuine success
    * from a 200 that actually means "someone else already did this". Bodies larger than

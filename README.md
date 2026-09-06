@@ -242,7 +242,9 @@ when a 200 can mean two different things — e.g. a ticket-check-in endpoint ret
 same ticket in while both were offline. Opt in to see it:
 
 ```ts
-createLowdataClient({ captureResponseBody: true });
+createLowdataClient({ captureResponseBody: true }); // client-wide default...
+
+await client.fetch('/api/checkin', { method: 'POST', body, captureResponseBody: true }); // ...or opt in per request, so only the endpoints that need it pay for it
 
 client.onSync((event) => {
   if (event.type === 'item-success' && event.response?.body?.status === 'ALREADY_SCANNED') {

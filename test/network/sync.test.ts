@@ -149,6 +149,67 @@ describe('SyncManager', () => {
     sync.destroy();
   });
 
+  it('never captures a response for a genuine network error — there is no Response to read', async () => {
+    const { queue, sync, events } = setup(
+      `sync-test-capture-network-error-${Math.random()}`,
+      { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1, jitter: 'none' },
+      { captureResponseBody: true },
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      }),
+    );
+
+    await queue.add(makeItem());
+    await sync.drain();
+
+    const failedEvent = events.find((e) => e.type === 'item-failed');
+    expect(failedEvent?.type === 'item-failed' && failedEvent.response).toBeUndefined();
+    sync.destroy();
+  });
+
+  it('a per-item captureResponseBody overrides the client default in both directions', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ status: 'ALREADY_SCANNED' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+
+    // Client default ON, this one item opts out.
+    {
+      const { queue, sync, events } = setup(
+        `sync-test-capture-item-off-${Math.random()}`,
+        undefined,
+        { captureResponseBody: true },
+      );
+      await queue.add(makeItem({ captureResponseBody: false }));
+      await sync.drain();
+      const successEvent = events.find((e) => e.type === 'item-success');
+      expect(successEvent?.type === 'item-success' && successEvent.response).toBeUndefined();
+      sync.destroy();
+    }
+
+    // Client default OFF, this one item opts in.
+    {
+      const { queue, sync, events } = setup(`sync-test-capture-item-on-${Math.random()}`);
+      await queue.add(makeItem({ captureResponseBody: true }));
+      await sync.drain();
+      const successEvent = events.find((e) => e.type === 'item-success');
+      expect(successEvent?.type === 'item-success' && successEvent.response).toEqual({
+        status: 200,
+        body: { status: 'ALREADY_SCANNED' },
+      });
+      sync.destroy();
+    }
+  });
+
   it("attaches the item's idempotencyKey as an Idempotency-Key header when sending", async () => {
     const { queue, sync } = setup(`sync-test-idem-${Math.random()}`);
     const sentHeaders: Array<Record<string, string> | undefined> = [];

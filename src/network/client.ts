@@ -324,6 +324,7 @@ export class LowdataClient {
       idempotencyKey: init.idempotencyKey,
       dependsOn: init.dependsOn,
       maxAgeMs: init.maxAgeMs,
+      captureResponseBody: init.captureResponseBody,
     });
     return { queued: true, id: saved.id, item: saved };
   }

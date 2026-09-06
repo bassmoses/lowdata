@@ -99,6 +99,32 @@ describe('createAsyncStorageAdapter', () => {
     expect(await adapter.count('queue')).toBe(0);
   });
 
+  it('uses multiGet (not one getItem call per key) when the host provides it', async () => {
+    const base = createFakeAsyncStorage();
+    let getItemCalls = 0;
+    let multiGetCalls = 0;
+    const spied: AsyncStorageLike = {
+      ...base,
+      async getItem(key) {
+        getItemCalls++;
+        return base.getItem(key);
+      },
+      async multiGet(keys) {
+        multiGetCalls++;
+        return Promise.all(keys.map(async (key) => [key, await base.getItem(key)] as const));
+      },
+    };
+    const adapter = createAsyncStorageAdapter(spied);
+    await adapter.put('queue', { id: '1', status: 'pending' });
+    await adapter.put('queue', { id: '2', status: 'pending' });
+
+    const all = await adapter.getAll('queue');
+
+    expect(all).toHaveLength(2);
+    expect(multiGetCalls).toBe(1);
+    expect(getItemCalls).toBe(0); // batched entirely through multiGet, not per-key getItem
+  });
+
   it('reports isPersistent() true — AsyncStorage always persists, unlike the IndexedDB fallback path', () => {
     const adapter = createAsyncStorageAdapter(createFakeAsyncStorage());
     expect(adapter.isPersistent()).toBe(true);

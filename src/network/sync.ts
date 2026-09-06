@@ -252,7 +252,8 @@ export class SyncManager {
           body: item.body ?? undefined,
           signal: controller.signal,
         });
-        if (this.opts.captureResponseBody) {
+        const shouldCapture = item.captureResponseBody ?? this.opts.captureResponseBody;
+        if (shouldCapture) {
           capturedResponse = await this.captureResponse(response);
         }
         // Only a genuine 2xx counts as delivered. Anything else — including a status this queue

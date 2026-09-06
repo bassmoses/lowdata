@@ -36,6 +36,18 @@ export interface StorageAdapter {
 }
 
 /**
+ * Reads a stored record's own `id`/`key`/`submissionId`-like field — the same identity every
+ * lowdata store (`queue`, `meta`, `formDrafts`) already keys its rows by. Shared by every adapter
+ * that has to derive a key from the value being put (`createMemoryStorageAdapter`,
+ * `createAsyncStorageAdapter`) rather than each re-implementing the same three-field fallback.
+ */
+export function recordIdOf<T>(value: T): string {
+  const record = value as Record<string, unknown>;
+  const candidate = record.id ?? record.key ?? record.submissionId;
+  return String(candidate);
+}
+
+/**
  * Non-persistent adapter: same interface, plain `Map`s underneath. Used automatically as the
  * fallback inside `createIndexedDbStorageAdapter`, and available directly for tests, SSR, or any
  * environment that deliberately wants no persistence.
@@ -52,16 +64,9 @@ export function createMemoryStorageAdapter(): StorageAdapter {
     return store;
   }
 
-  /** Reads the object's own `key`/`id`-like field so `get(store, key)` round-trips by identity. */
-  function keyOf<T>(value: T): string {
-    const record = value as Record<string, unknown>;
-    const candidate = record.id ?? record.key ?? record.submissionId;
-    return String(candidate);
-  }
-
   return {
     async put<T>(store: string, value: T): Promise<void> {
-      storeFor(store).set(keyOf(value), value);
+      storeFor(store).set(recordIdOf(value), value);
     },
     async get<T>(store: string, key: string): Promise<T | undefined> {
       return storeFor(store).get(key) as T | undefined;
