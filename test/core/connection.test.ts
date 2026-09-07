@@ -80,6 +80,48 @@ describe('ConnectionMonitor', () => {
     monitor.destroy();
   });
 
+  it('does not crash in a host where `window` exists but has no working addEventListener (e.g. React Native/Hermes)', () => {
+    // React Native defines a `window` global for library-compatibility reasons, but it isn't a
+    // real DOM window — `window.addEventListener` is simply absent. `typeof window !== 'undefined'`
+    // alone doesn't catch this; reproduce that exact shape rather than just asserting on the
+    // production code's own logic.
+    const originalAddEventListener = window.addEventListener;
+    const originalRemoveEventListener = window.removeEventListener;
+    // @ts-expect-error -- deliberately simulating a host where these are missing, not functions
+    delete window.addEventListener;
+    // @ts-expect-error -- see above
+    delete window.removeEventListener;
+
+    try {
+      expect(() => {
+        const monitor = new ConnectionMonitor();
+        monitor.destroy();
+      }).not.toThrow();
+    } finally {
+      window.addEventListener = originalAddEventListener;
+      window.removeEventListener = originalRemoveEventListener;
+    }
+  });
+
+  it('still supports reportStatus() as the manual fallback when window.addEventListener is missing', () => {
+    const originalAddEventListener = window.addEventListener;
+    delete (window as { addEventListener?: unknown }).addEventListener;
+
+    try {
+      const monitor = new ConnectionMonitor();
+      const listener = vi.fn();
+      monitor.subscribe(listener);
+
+      monitor.reportStatus({ quality: 'offline', online: false });
+
+      expect(monitor.getStatus()).toEqual({ quality: 'offline', online: false });
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({ quality: 'offline' }));
+      monitor.destroy();
+    } finally {
+      window.addEventListener = originalAddEventListener;
+    }
+  });
+
   it('stops emitting after destroy()', () => {
     const monitor = new ConnectionMonitor();
     const listener = vi.fn();

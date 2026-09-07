@@ -45,6 +45,17 @@ function hasNavigator(): boolean {
 }
 
 /**
+ * `typeof window !== 'undefined'` alone is not a safe guard: several non-browser hosts (React
+ * Native's Hermes engine among them) define a `window` global for library-compatibility reasons
+ * without it being a real DOM window — `window.addEventListener` is simply absent, and calling it
+ * throws instead of no-op'ing. Check for the actual method being callable, not just the global's
+ * existence, before ever touching it.
+ */
+function hasWindowEvents(): boolean {
+  return typeof window !== 'undefined' && typeof window.addEventListener === 'function';
+}
+
+/**
  * Tracks connection quality (online / slow / offline) using the best signal available:
  * `navigator.onLine` + online/offline events as the universal baseline, `navigator.connection`
  * where present, and an optional opt-in ping probe as a cross-browser fallback for 'slow'.
@@ -71,7 +82,7 @@ export class ConnectionMonitor {
     };
     this.current = this.computeInfo();
 
-    if (hasNavigator() && typeof window !== 'undefined') {
+    if (hasNavigator() && hasWindowEvents()) {
       this.onlineHandler = () => {
         this.refresh();
         void this.probeNow();
@@ -140,7 +151,7 @@ export class ConnectionMonitor {
   destroy(): void {
     if (this.disposed) return;
     this.disposed = true;
-    if (typeof window !== 'undefined') {
+    if (hasWindowEvents()) {
       if (this.onlineHandler) window.removeEventListener('online', this.onlineHandler);
       if (this.offlineHandler) window.removeEventListener('offline', this.offlineHandler);
     }
