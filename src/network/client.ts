@@ -4,6 +4,7 @@ import { Emitter } from '../core/events.js';
 import { createId } from '../core/id.js';
 import { createIndexedDbStorageAdapter, type StorageAdapter } from '../core/storageAdapter.js';
 import { LOWDATA_DB_NAME, LOWDATA_STORES } from '../core/idb.js';
+import { CircuitBreaker } from './circuitBreaker.js';
 import type {
   ConnectionInfo,
   ConnectionListener,
@@ -100,6 +101,11 @@ export class LowdataClient {
   readonly storage: StorageAdapter;
   private requestQueue: RequestQueue;
   private syncManager: SyncManager;
+  /**
+   * Shared with `SyncManager` (same instance, not a config clone) so a failing endpoint opens the
+   * breaker regardless of whether the failure came from a live `fetch()` attempt or a queued retry.
+   */
+  private breaker: CircuitBreaker;
   private syncEmitter = new Emitter<SyncEvent>();
   private broadcast: QueueBroadcast;
   private destroyed = false;
@@ -116,6 +122,7 @@ export class LowdataClient {
     this.storage = storage;
 
     this.monitor = new ConnectionMonitor(config.connection);
+    this.breaker = new CircuitBreaker(config.circuitBreaker);
     this.requestQueue = new RequestQueue(storage, config.encryption, onError);
     this.broadcast = createQueueBroadcast(
       config.namespace ? `lowdata-queue:${config.namespace}` : undefined,
@@ -126,7 +133,7 @@ export class LowdataClient {
       storage,
       retryConfig: config.retry,
       syncConcurrency: config.syncConcurrency,
-      circuitBreaker: config.circuitBreaker,
+      circuitBreaker: this.breaker,
       schemaVersion: config.schemaVersion,
       migrateQueueItem: config.migrateQueueItem,
       captureResponseBody: config.captureResponseBody,
@@ -210,8 +217,16 @@ export class LowdataClient {
       });
     }
 
+    // A live attempt against an origin whose breaker is already open is doomed — skip it entirely
+    // and go straight to the queue fallback instead of paying for (and failing) a request we
+    // already know won't get through. Sharing `this.breaker` with SyncManager means this reacts to
+    // failures recorded by either path, not just other live attempts.
+    if (canQueue && this.breaker.isOpen(fullUrl)) {
+      return this.enqueueFromInit(fullUrl, method, { ...init, headers, idempotencyKey });
+    }
+
     try {
-      return await attemptWithRetry({
+      const response = await attemptWithRetry({
         url: fullUrl,
         init: { ...init, headers },
         retryConfig: { ...this.config.retry, ...init.retry },
@@ -219,9 +234,18 @@ export class LowdataClient {
         signal: init.signal ?? undefined,
         shouldContinue: () => this.monitor.getStatus().quality !== 'offline',
       });
+      if (canQueue) {
+        if (response.ok) {
+          this.breaker.recordSuccess(fullUrl);
+        } else {
+          this.recordBreakerFailure(fullUrl);
+        }
+      }
+      return response;
     } catch (err) {
       if (init.signal?.aborted) throw err; // explicit cancellation — never silently queue
       if (canQueue) {
+        this.recordBreakerFailure(fullUrl);
         return this.enqueueFromInit(fullUrl, method, { ...init, headers, idempotencyKey });
       }
       throw err;
@@ -259,6 +283,16 @@ export class LowdataClient {
     if (this.config.autoIdempotencyKey === false) return undefined;
     if (!MUTATING_METHODS.has(method)) return undefined;
     return createId();
+  }
+
+  /**
+   * Mirrors `SyncManager`'s own `'circuit-open'` emission, so `onSync()` observability is
+   * consistent regardless of which path (live or queued) tripped the shared breaker.
+   */
+  private recordBreakerFailure(url: string): void {
+    if (this.breaker.recordFailure(url)) {
+      this.syncEmitter.emit({ type: 'circuit-open', key: this.breaker.keyFor(url) });
+    }
   }
 
   private maxQueueItemBytes(): number {
@@ -326,6 +360,7 @@ export class LowdataClient {
       dependsOn: init.dependsOn,
       maxAgeMs: init.maxAgeMs,
       captureResponseBody: init.captureResponseBody,
+      dedupeKey: init.dedupeKey,
     });
     return { queued: true, id: saved.id, item: saved };
   }

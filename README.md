@@ -35,6 +35,36 @@ huge parts of Africa — that assumption breaks constantly:
 lowdata doesn't try to be a full offline-first framework or a service-worker-based PWA toolkit. It
 solves the four concrete problems above, as simply as possible, and gets out of your way otherwise.
 
+## What makes lowdata different
+
+Individually, every piece of lowdata sounds like something available elsewhere — a request queue,
+a retry policy, a canvas-based image resizer. Across a review of the closest comparable packages
+(general offline-request-queue libraries, and dedicated client-side image compression libraries),
+a few specific things aren't:
+
+- **Bandwidth-aware media compression.** `compressImage()` ties JPEG quality, max dimensions, and
+  target file size directly to *live* connection quality (`online`/`slow`/`offline`) via
+  `presetForQuality()` — not a fixed setting you configure once. A photo compressed while offline
+  comes out smaller than one compressed on a fast connection, because it's headed into the
+  persistent queue, where every extra KB costs storage quota now and mobile data later.
+- **A per-endpoint circuit breaker.** When one host is persistently down, `CircuitBreaker` backs
+  every queued item against it off together, instead of each one independently retrying (and
+  failing) against a host already known to be down.
+- **`resolveHeaders` — auth refreshed before every retry, not just at enqueue time.** A bearer token
+  captured when a request was first queued can expire during a long offline stretch;
+  `resolveHeaders` runs fresh immediately before *every* send attempt, including a retry firing
+  hours later, so a stale token doesn't turn into a queue that 401s forever.
+- **`Retry-After` handling built in.** `429`/`503` responses carrying a `Retry-After` header are
+  honored automatically as part of the retry/backoff calculation, not left for you to parse and
+  wire in.
+- **One offline-queue core, five framework bindings.** The same `LowdataClient`/queue/sync-event
+  model is exposed through `lowdata/react`, `lowdata/vue`, `lowdata/svelte`, `lowdata/angular`, and
+  `lowdata/solid` — each typed against its own framework's native primitives (hooks, Composition
+  API refs, stores, RxJS Observables, Solid primitives), not one implementation with thin ports.
+
+None of this needs a service worker or a runtime dependency — see "Bundle size" and "lowdata vs.
+alternatives" below.
+
 ## Install
 
 ```bash
@@ -303,7 +333,7 @@ loader.subscribe(({ src, isLoaded }) => setImgSrc(src));
 
 | Subpath           | Exports                                                                                                                                                                                                                                   |
 | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lowdata`         | `createLowdataClient`, `LowdataClient`, `isQueued`, `LowdataRequestError`, `createOfflineForm`, `getConnectionQuality`, `onConnectionChange`, `createIndexedDbStorageAdapter`, `createMemoryStorageAdapter`, `CircuitBreaker`, core types |
+| `lowdata`         | `createLowdataClient`, `LowdataClient`, `isQueued`, `LowdataRequestError`, `createOfflineForm`, `getConnectionQuality`, `onConnectionChange`, `createIndexedDbStorageAdapter`, `createMemoryStorageAdapter`, `createLocalStorageAdapter`, `CircuitBreaker`, core types |
 | `lowdata/network` | Everything in the root, plus `RequestQueue`, `SyncManager`, `ConnectionMonitor`, `defaultRetryOn`, `defaultBreakerKey`, `createQueueBroadcast`                                                                                            |
 | `lowdata/forms`   | `createOfflineForm`, form types                                                                                                                                                                                                           |
 | `lowdata/media`   | `compressImage`, `createProgressiveImageLoader`, `presetForQuality`                                                                                                                                                                       |
@@ -439,6 +469,16 @@ every extension point needed to run there is already exposed:
   // the second argument namespaces the same way `namespace` does on the web — isolate a shared
   // device's data per event/organizer/tenant instead of one global queue.
   ```
+  Separately — this one is for a **browser** context, not these non-browser hosts: where
+  IndexedDB itself is unavailable or crippled (Safari private browsing, some locked-down in-app
+  webviews) but synchronous `localStorage` still works, `createLocalStorageAdapter()` is a
+  ready-made fallback. It is **not** a replacement for IndexedDB at scale — `localStorage`'s
+  real-world quota is only ~5-10 MB total per origin, and every read/write is synchronous:
+  ```ts
+  import { createLowdataClient, createLocalStorageAdapter } from 'lowdata';
+
+  createLowdataClient({ storage: createLocalStorageAdapter() });
+  ```
   For Electron's main process or a Node backend, implement `StorageAdapter` directly (five methods:
   `put`/`get`/`getAll`/`delete`/`clear`/`count`) over SQLite or anything else — or fall back to the
   automatic in-memory adapter for a session with no persistence needs.
@@ -473,6 +513,8 @@ every extension point needed to run there is already exposed:
   contexts, locked-down private-browsing modes, React Native/Electron/Node — see above), lowdata
   falls back to an in-memory queue with a console warning instead of throwing — nothing breaks,
   offline persistence is just unavailable until you supply a `storage` adapter.
+  `createLocalStorageAdapter()` is a ready-made option for exactly that fallback — see "Runtime
+  support" above.
 - **SSR-safe to import**: `createLowdataClient()` and friends never assume `window`/`navigator`
   exist; on the server, connection quality reports `'online'` and nothing touches the DOM.
 
@@ -497,10 +539,15 @@ import.
 
 | Subpath                                                  | gzip (unminified) |
 | -------------------------------------------------------- | ----------------- |
-| `lowdata` (core + network + forms)                       | ~14.7 KB          |
-| `lowdata/network` alone                                  | ~13.5 KB          |
-| `lowdata/media` alone                                    | ~3.0 KB           |
-| `lowdata/react` / `vue` / `svelte` / `angular` / `solid` | ~15 KB each       |
+| `lowdata` (core + network + forms)                       | ~18.4 KB          |
+| `lowdata/network` alone                                  | ~17.3 KB          |
+| `lowdata/media` alone                                    | ~3.9 KB           |
+| `lowdata/react` / `vue` / `svelte` / `angular` / `solid` | ~17.4-17.9 KB each |
+
+Includes `createLocalStorageAdapter` and the Worker/OffscreenCanvas image-compression path — both
+additive, neither adds a dependency. The worker itself is a small inline string, not a separate
+asset; it never loads unless `compressImage()` is actually called in an environment that supports
+it.
 
 Framework subpaths are each a standalone bundle (not a thin diff on top of `lowdata`) — importing
 one doesn't require also fetching the root package separately.
@@ -516,6 +563,15 @@ quality search) is never pulled in by the root import; you opt in explicitly via
   format with your own service worker, or wait for a future release.
 - **vs. `axios-retry`/generic retry libraries:** those retry a single in-flight request; lowdata
   additionally persists failed/offline requests to survive a reload and syncs them automatically.
+- **vs. other offline-queue/request-persistence libraries:** several small packages persist and
+  retry queued requests the way lowdata does; none reviewed ship a per-endpoint circuit breaker, a
+  `resolveHeaders` hook that re-runs before every retry (not just at enqueue time), or built-in
+  `Retry-After` handling — those still need to be hand-rolled on top.
+- **vs. static-config image compression libraries:** general-purpose client-side compressors
+  (Canvas- or WASM-based) apply a fixed quality/dimension setting regardless of the user's actual
+  connection. lowdata's `connectionAware` presets tie compression aggressiveness to live connection
+  quality instead, and — like the more established libraries in this space — run off the main
+  thread via `Worker`/`OffscreenCanvas` where available, falling back to the main thread otherwise.
 - **vs. building it yourself:** this is the boring, well-tested version of the offline queue +
   retry + form-status code most apps end up hand-rolling anyway.
 

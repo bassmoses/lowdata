@@ -341,4 +341,88 @@ describe('LowdataClient', () => {
     });
     expect(await client.queue.list()).toHaveLength(0);
   });
+
+  it('skips the live attempt entirely when the breaker is already open for the origin', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+    client = createLowdataClient({
+      namespace: uniqueNamespace(),
+      circuitBreaker: { threshold: 1, cooldownMs: 60_000 },
+      retry: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1, jitter: 'none' },
+      onError: () => {},
+    });
+
+    await client.fetch('/api/orders', { method: 'POST', body: '{}' });
+    expect(fetchMock).toHaveBeenCalledTimes(1); // failed, breaker opens (threshold: 1)
+
+    const result = await client.fetch('/api/orders', { method: 'POST', body: '{}' });
+    expect(isQueued(result)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // still 1 — no doomed second live attempt
+  });
+
+  it('a live failure feeds the same breaker SyncManager uses for queued sends', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+    client = createLowdataClient({
+      namespace: uniqueNamespace(),
+      circuitBreaker: { threshold: 1, cooldownMs: 60_000 },
+      retry: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1, jitter: 'none' },
+      onError: () => {},
+    });
+
+    const blocked: unknown[] = [];
+    client.onSync((e) => {
+      if (e.type === 'items-blocked') blocked.push(e);
+    });
+
+    await client.fetch('/api/orders', { method: 'POST', body: '{}' });
+    expect(fetchMock).toHaveBeenCalledTimes(1); // failed live attempt opens the breaker
+
+    await client.queue.add({
+      url: '/api/orders',
+      method: 'POST',
+      priority: 'normal',
+      body: '{}',
+    });
+    await client.sync();
+
+    // notifyEnqueued()'s own fire-and-forget drain (triggered by queue.add() above) can still be
+    // mid-flight when sync() resolves — wait for the event rather than asserting immediately.
+    await waitForCondition(() => blocked.length > 0, {
+      message: 'expected an items-blocked (circuit-breaker) event for the queued item',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1); // queued send was withheld, not attempted a 2nd time
+  });
+
+  it('a live success on a previously-failing origin closes the shared breaker again', async () => {
+    // Deliberately doesn't assert exact fetchMock call counts along the way: with a cooldown this
+    // short, the same enqueue that opens the breaker also fires SyncManager's own fire-and-forget
+    // auto-drain (notifyEnqueued()), which can legitimately claim the half-open trial itself once
+    // the cooldown elapses, racing this test's own final call. Either one succeeding is correct
+    // breaker behavior — this only asserts the end-to-end outcome (a live call goes through again
+    // once the cooldown has passed), not which caller specifically claimed the trial.
+    let shouldFail = true;
+    const fetchMock = vi.fn(async () =>
+      shouldFail ? new Response(null, { status: 503 }) : new Response(null, { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    client = createLowdataClient({
+      namespace: uniqueNamespace(),
+      circuitBreaker: { threshold: 1, cooldownMs: 10 },
+      retry: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1, jitter: 'none' },
+      onError: () => {},
+    });
+
+    await client.fetch('/api/orders', { method: 'POST', body: '{}' }); // opens the breaker
+
+    shouldFail = false;
+    await new Promise((resolve) => setTimeout(resolve, 20)); // well past cooldownMs: 10
+
+    // By now the breaker is either still open (this call claims the half-open trial itself) or
+    // already closed (a background auto-drain claimed it first and succeeded) — either way, a
+    // live call from here on must go straight through and succeed, not queue.
+    const result = await client.fetch('/api/orders', { method: 'POST', body: '{}' });
+    expect(isQueued(result)).toBe(false);
+    expect((result as Response).status).toBe(200);
+  });
 });

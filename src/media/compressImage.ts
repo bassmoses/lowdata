@@ -1,13 +1,12 @@
 import { getConnectionQuality } from '../core/connection.js';
 import { presetForQuality } from './qualityPolicy.js';
+import { MIN_QUALITY, QUALITY_STEP, MAX_QUALITY_ITERATIONS } from './compressionConstants.js';
+import { compressInWorker } from './compressImageWorker.js';
 import type { CompressedImageResult, ImageCompressionOptions } from './types.js';
 
 const DEFAULT_MAX_WIDTH = 1280;
 const DEFAULT_QUALITY = 0.6;
 const DEFAULT_MIME: NonNullable<ImageCompressionOptions['mimeType']> = 'image/jpeg';
-const MIN_QUALITY = 0.35;
-const QUALITY_STEP = 0.1;
-const MAX_QUALITY_ITERATIONS = 5;
 
 type ImageSource = ImageBitmap | HTMLImageElement;
 
@@ -96,6 +95,17 @@ export async function compressImage(
   const mimeType = options.mimeType ?? DEFAULT_MIME;
   const targetSizeKB = options.targetSizeKB ?? preset?.targetSizeKB;
   let quality = options.quality ?? preset?.quality ?? DEFAULT_QUALITY;
+
+  if (!options.preferMainThread) {
+    const viaWorker = await compressInWorker(file, {
+      maxWidth,
+      maxHeight,
+      mimeType,
+      quality,
+      targetSizeKB,
+    });
+    if (viaWorker) return viaWorker;
+  }
 
   const source = await loadImageSource(file);
   const { width, height } = computeTargetDimensions(

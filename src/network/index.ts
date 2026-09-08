@@ -38,5 +38,7 @@ export {
 export type { StorageAdapter, IndexedDbStorageAdapterOptions } from '../core/storageAdapter.js';
 export { createAsyncStorageAdapter } from '../core/asyncStorageAdapter.js';
 export type { AsyncStorageLike } from '../core/asyncStorageAdapter.js';
+export { createLocalStorageAdapter } from '../core/localStorageAdapter.js';
+export type { LocalStorageAdapterOptions } from '../core/localStorageAdapter.js';
 export { createQueueBroadcast } from '../core/broadcast.js';
 export type { QueueBroadcast } from '../core/broadcast.js';

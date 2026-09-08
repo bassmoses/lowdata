@@ -9,6 +9,13 @@ export interface ImageCompressionOptions {
   targetSizeKB?: number;
   /** Pull `maxWidth`/`quality`/`targetSizeKB` defaults from the current connection quality. */
   connectionAware?: boolean;
+  /**
+   * Skip the Worker/OffscreenCanvas path even when supported, and always use the main-thread
+   * canvas path. Default `false`. Escape hatch for CSP setups this library's own feature detection
+   * doesn't catch, known-buggy `OffscreenCanvas` driver combinations, or tests that want
+   * deterministic, worker-free behavior.
+   */
+  preferMainThread?: boolean;
 }
 
 export interface CompressedImageResult {

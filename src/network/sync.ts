@@ -33,7 +33,12 @@ export interface SyncManagerOptions {
   retryConfig?: Partial<RetryBackoffConfig>;
   /** How many queued items to send concurrently. Default 1 — deliberately conservative on 2G. */
   syncConcurrency?: number;
-  circuitBreaker?: CircuitBreakerConfig;
+  /**
+   * Either a config to build a breaker from, or an already-constructed `CircuitBreaker` instance —
+   * `LowdataClient` passes its own live instance here so a failing endpoint opens the same breaker
+   * regardless of whether the failure came from a live `fetch()` attempt or a queued retry.
+   */
+  circuitBreaker?: CircuitBreakerConfig | CircuitBreaker;
   schemaVersion?: number;
   migrateQueueItem?: (item: QueueItem) => QueueItem;
   captureResponseBody?: boolean;
@@ -64,7 +69,11 @@ export class SyncManager {
   constructor(private opts: SyncManagerOptions) {
     this.retryConfig = { ...DEFAULT_RETRY_CONFIG, ...opts.retryConfig };
     this.syncConcurrency = Math.max(1, opts.syncConcurrency ?? 1);
-    this.breaker = new CircuitBreaker(opts.circuitBreaker);
+    const circuitBreakerOption = opts.circuitBreaker;
+    this.breaker =
+      circuitBreakerOption instanceof CircuitBreaker
+        ? circuitBreakerOption
+        : new CircuitBreaker(circuitBreakerOption);
 
     this.unsubscribeConnection = this.opts.connection.subscribe((info) => {
       if (info.quality !== 'offline') void this.drain();

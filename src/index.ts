@@ -13,6 +13,7 @@ export {
   ConnectionMonitor,
   createIndexedDbStorageAdapter,
   createMemoryStorageAdapter,
+  createLocalStorageAdapter,
   CircuitBreaker,
   defaultBreakerKey,
 } from './network/index.js';
@@ -37,6 +38,7 @@ export type {
   EncryptionHooks,
   StorageAdapter,
   IndexedDbStorageAdapterOptions,
+  LocalStorageAdapterOptions,
   CircuitBreakerConfig,
   CapturedResponse,
 } from './network/index.js';

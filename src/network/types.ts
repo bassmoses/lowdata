@@ -45,6 +45,15 @@ export interface QueueItem {
   bodyEncrypted?: boolean;
   /** Overrides `LowdataClientConfig.captureResponseBody` for this item only — e.g. capture it for a check-in endpoint but not for everything else queued. */
   captureResponseBody?: boolean;
+  /**
+   * Opt-in de-duplication key. When `RequestQueue.add()` is called with a `dedupeKey` that matches
+   * an existing *pending* item's `dedupeKey`, that existing item is updated in place (same `id`/
+   * `createdAt`, so anything that already `dependsOn` it keeps resolving against it) with this
+   * call's content instead of a second queue entry being inserted. Never matches a `'sending'`
+   * item (it may already be mid-flight) or a terminal one. Useful for "only the latest write to
+   * this record matters" flows — e.g. repeatedly updating one draft while offline.
+   */
+  dedupeKey?: string;
 }
 
 export interface EnqueueOptions {
@@ -58,6 +67,8 @@ export interface EnqueueOptions {
   dependsOn?: string[];
   maxAgeMs?: number;
   captureResponseBody?: boolean;
+  /** See `QueueItem.dedupeKey`. */
+  dedupeKey?: string;
 }
 
 /** Result returned by `client.fetch()` when a request could not be sent live and was queued instead. */

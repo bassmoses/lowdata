@@ -73,9 +73,81 @@ export class RequestQueue {
     }
   }
 
+  /**
+   * Persists `item`. If `item.dedupeKey` matches an existing `'pending'` item's `dedupeKey`, that
+   * existing item is updated in place (same `id`/`createdAt` — so anything that already
+   * `dependsOn` it is unaffected) with this call's content instead of a second entry being
+   * inserted; the returned `QueueItem` reflects whichever one actually got persisted, which may
+   * carry a different `id` than the one on the `item` passed in. Rejects (throws `TypeError`,
+   * synchronously via the returned promise) if `item.dependsOn` — checked against the final,
+   * post-dedupe shape — would create a dependency cycle back to itself.
+   */
   async add(item: QueueItem): Promise<QueueItem> {
-    await this.storage.put(STORE, await this.encryptForStorage(item));
-    return item;
+    const deduped = item.dedupeKey ? await this.dedupeReplace(item) : undefined;
+    const toPersist = deduped ?? item;
+    if (toPersist.dependsOn && toPersist.dependsOn.length > 0) {
+      await this.assertNoDependencyCycle(toPersist);
+    }
+    await this.storage.put(STORE, await this.encryptForStorage(toPersist));
+    return toPersist;
+  }
+
+  /**
+   * If `item.dedupeKey` matches an existing *pending* item's `dedupeKey`, folds this call's
+   * content into that existing item in place — same `id`/`createdAt`, everything else (url,
+   * method, body, headers, meta, priority, retry/timeout/idempotencyKey/etc.) taken from this new
+   * call. `attempts`/`lastError` are reset and `nextAttemptAt` set to now — a dedup replace
+   * supersedes whatever attempt history the stale content had; that history no longer describes
+   * the content that will actually be sent. Only ever matches `'pending'` — never `'sending'`
+   * (may already be mid-flight, racy to mutate) or a terminal status. Best-effort, not atomic: two
+   * `add()` calls issued concurrently with the same `dedupeKey` (e.g. via `Promise.all`) can both
+   * fail to see each other's not-yet-persisted item and both insert.
+   */
+  private async dedupeReplace(item: QueueItem): Promise<QueueItem | undefined> {
+    const pending = await this.list({ status: 'pending' });
+    const existing = pending.find((candidate) => candidate.dedupeKey === item.dedupeKey);
+    if (!existing) return undefined;
+
+    const now = Date.now();
+    return {
+      ...item,
+      id: existing.id,
+      createdAt: existing.createdAt,
+      attempts: 0,
+      status: 'pending',
+      lastError: undefined,
+      updatedAt: now,
+      nextAttemptAt: now,
+    };
+  }
+
+  /**
+   * Walks forward from `item`'s own outgoing `dependsOn` edges, through already-persisted items'
+   * `dependsOn` edges, and throws if that walk ever revisits `item.id` — i.e. adding `item` would
+   * create a dependency cycle (direct self-dependency included). `item` itself isn't persisted
+   * yet, so it seeds the "already seen" root rather than being looked up in `byId`. Only pays for
+   * a full-table scan when `item.dependsOn` is non-empty — mirrors `dependencyLookupIfNeeded()`.
+   * Note: only enforced here, in `add()` — a cycle introduced by directly mutating an existing
+   * item's `dependsOn` via `update()` isn't caught.
+   */
+  private async assertNoDependencyCycle(item: QueueItem): Promise<void> {
+    const all = await this.list();
+    const byId = new Map(all.map((existing) => [existing.id, existing]));
+
+    const visited = new Set<string>([item.id]);
+    const stack = [...(item.dependsOn ?? [])];
+    while (stack.length > 0) {
+      const nextId = stack.pop()!;
+      if (nextId === item.id) {
+        throw new TypeError(
+          `lowdata: item "${item.id}"'s dependsOn would create a circular dependency chain back to itself.`,
+        );
+      }
+      if (visited.has(nextId)) continue; // already walked this node via another path
+      visited.add(nextId);
+      const dep = byId.get(nextId);
+      if (dep?.dependsOn) stack.push(...dep.dependsOn);
+    }
   }
 
   async update(item: QueueItem): Promise<void> {

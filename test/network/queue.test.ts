@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RequestQueue } from '../../src/network/queue.js';
 import { createMemoryStorageAdapter } from '../../src/core/storageAdapter.js';
+import { createId } from '../../src/core/id.js';
 import { openTestAdapter } from '../helpers/db.js';
 import { makeQueueItem } from '../helpers/queueItem.js';
 
@@ -189,5 +190,87 @@ describe('RequestQueue', () => {
     expect(queue.isPersistent()).toBe(false);
     expect(await queue.get(item.id)).toEqual(item);
     expect(await queue.list()).toHaveLength(1);
+  });
+
+  it('rejects a self-dependency (item.dependsOn including its own id)', async () => {
+    const queue = makeQueue(`queue-test-cycle-self-${Math.random()}`);
+    const item = makeQueueItem({ id: 'self', dependsOn: ['self'] });
+    await expect(queue.add(item)).rejects.toThrow(TypeError);
+    expect(await queue.list()).toHaveLength(0);
+  });
+
+  it('rejects a 2-node dependency cycle created across two add() calls', async () => {
+    const queue = makeQueue(`queue-test-cycle-2node-${Math.random()}`);
+    const idA = createId();
+    const idB = createId();
+    await queue.add(makeQueueItem({ id: idA, dependsOn: [idB] }));
+    await expect(queue.add(makeQueueItem({ id: idB, dependsOn: [idA] }))).rejects.toThrow(
+      TypeError,
+    );
+    // The first item (idA) was already persisted before the cycle was attempted — untouched.
+    expect(await queue.list()).toHaveLength(1);
+  });
+
+  it('allows a normal, non-cyclic dependency chain (a <- b <- c)', async () => {
+    const queue = makeQueue(`queue-test-cycle-chain-ok-${Math.random()}`);
+    await queue.add(makeQueueItem({ id: 'a' }));
+    await queue.add(makeQueueItem({ id: 'b', dependsOn: ['a'] }));
+    await queue.add(makeQueueItem({ id: 'c', dependsOn: ['b'] }));
+    expect(await queue.list()).toHaveLength(3);
+  });
+
+  it('dedupeKey replaces a matching pending item in place, keeping the same id', async () => {
+    const queue = makeQueue(`queue-test-dedup-replace-${Math.random()}`);
+    const first = await queue.add(makeQueueItem({ dedupeKey: 'draft-1', body: '{"v":1}' }));
+
+    const second = await queue.add(
+      makeQueueItem({ dedupeKey: 'draft-1', body: '{"v":2}', priority: 'high' }),
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(await queue.list()).toHaveLength(1);
+    const stored = await queue.get(first.id);
+    expect(stored?.body).toBe('{"v":2}');
+    expect(stored?.priority).toBe('high');
+    expect(stored?.attempts).toBe(0);
+    expect(stored?.status).toBe('pending');
+  });
+
+  it('does not dedupe when statuses differ, or when no dedupeKey is given', async () => {
+    const queue = makeQueue(`queue-test-dedup-no-match-${Math.random()}`);
+
+    // Same dedupeKey, but the existing item is no longer 'pending' — no replace.
+    const done = await queue.add(makeQueueItem({ id: 'done-item', dedupeKey: 'k', status: 'done' }));
+    await queue.add(makeQueueItem({ id: 'new-item', dedupeKey: 'k' }));
+    expect(await queue.list()).toHaveLength(2);
+    expect(await queue.get(done.id)).toBeDefined(); // untouched
+
+    // No dedupeKey at all on either side — both persist independently, as today.
+    await queue.add(makeQueueItem());
+    await queue.add(makeQueueItem());
+    expect(await queue.list()).toHaveLength(4);
+  });
+
+  it("a dependent's dependsOn still resolves correctly after its target was replaced via dedupe", async () => {
+    const queue = makeQueue(`queue-test-dedup-deps-${Math.random()}`);
+    const now = Date.now();
+    const parent = await queue.add(
+      makeQueueItem({ id: 'parent', dedupeKey: 'parent-key', nextAttemptAt: now }),
+    );
+    await queue.add(makeQueueItem({ id: 'child', dependsOn: [parent.id], nextAttemptAt: now }));
+
+    // Replace parent's content via dedupe — same id, still pending. dedupeReplace() resets
+    // nextAttemptAt to the real current time (not whatever the caller passed), so check
+    // eligibility against a freshly-captured timestamp rather than the earlier `now`.
+    await queue.add(makeQueueItem({ dedupeKey: 'parent-key', body: '{"updated":true}' }));
+    const after = Date.now();
+    expect(await queue.list()).toHaveLength(2); // parent (replaced in place) + child, not 3
+
+    // Still blocked — the (replaced) parent is still present and pending.
+    expect((await queue.selectEligible(after)).map((i) => i.id)).toEqual([parent.id]);
+
+    // Once the (replaced) parent is purged, the child unblocks — id-based dependsOn still works.
+    await queue.remove(parent.id);
+    expect((await queue.selectEligible(after)).map((i) => i.id)).toEqual(['child']);
   });
 });
