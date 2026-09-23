@@ -51,4 +51,16 @@ describe('createProgressiveImageLoader', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(listener).not.toHaveBeenCalled();
   });
+
+  it('reports the full src as already loaded when there is no Image constructor (SSR)', () => {
+    vi.stubGlobal('Image', undefined);
+
+    const loader = createProgressiveImageLoader({ src: '/full.jpg', placeholder: '/tiny.jpg' });
+
+    // Nothing to preload server-side, so it reports the target src directly rather than getting
+    // stuck showing the placeholder forever.
+    expect(loader.getState()).toEqual({ src: '/full.jpg', isLoaded: true });
+
+    loader.destroy();
+  });
 });

@@ -89,6 +89,45 @@ describe('compressImage — Worker/OffscreenCanvas path', () => {
     );
   });
 
+  it('falls open to the main-thread path, and never retries the worker again, when the worker crashes mid-flight (onerror)', async () => {
+    const ctorSpy = vi.fn();
+    class CrashingWorker extends FakeWorker {
+      constructor(url: string) {
+        super(url);
+        ctorSpy();
+      }
+      override postMessage = vi.fn(() => {
+        // Simulate the whole worker dying before it ever replies — never calls onmessage.
+        queueMicrotask(() => this.onerror?.(new Event('error')));
+      });
+    }
+    stubWorkerEnvironment(CrashingWorker);
+    const file = new Blob(['fake'], { type: 'image/jpeg' });
+
+    const result1 = await compressImage(file, { maxWidth: 800 });
+    expect(result1.quality).toBeGreaterThan(0); // resolved via main-thread fallback, not hung/rejected
+
+    // A second call must not attempt to construct another worker — `workerUnavailable` is sticky
+    // for the rest of the session once the worker has crashed once.
+    const result2 = await compressImage(file, { maxWidth: 800 });
+    expect(result2.quality).toBeGreaterThan(0);
+    expect(ctorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails open to the main-thread path when postMessage itself throws', async () => {
+    class ThrowingPostMessageWorker extends FakeWorker {
+      override postMessage = vi.fn(() => {
+        throw new Error('postMessage failed');
+      });
+    }
+    stubWorkerEnvironment(ThrowingPostMessageWorker);
+    const file = new Blob(['fake'], { type: 'image/jpeg' });
+
+    const result = await compressImage(file, { maxWidth: 800 });
+
+    expect(result.quality).toBeGreaterThan(0);
+  });
+
   it('preferMainThread: true skips the worker entirely even when it is fully supported', async () => {
     const ctorSpy = vi.fn();
     class SpiedWorker extends FakeWorker {

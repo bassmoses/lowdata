@@ -204,11 +204,18 @@ export function createLocalStorageAdapter(
       await memory.put(store, value);
     },
     async get<T>(store: string, key: string): Promise<T | undefined> {
+      // Check memory first: per getAllMerged()'s documented contract, a record only ever lands in
+      // memory *after* a real localStorage write for that same id has already failed, so memory's
+      // copy (when present) is always the fresher one. Checking `storage` first — as this used to —
+      // meant get() silently returned stale pre-failure data for an id that getAll()/count() already
+      // reported correctly from memory, an inconsistency between single-key and bulk reads.
+      const fromMemory = await memory.get<T>(store, key);
+      if (fromMemory !== undefined) return fromMemory;
       if (storage) {
         const raw = storage.getItem(keyFor(store, key));
         if (raw != null) return JSON.parse(raw) as T;
       }
-      return memory.get<T>(store, key);
+      return undefined;
     },
     async getAll<T>(
       store: string,

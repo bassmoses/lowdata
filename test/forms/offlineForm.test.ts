@@ -249,4 +249,103 @@ describe('createOfflineForm', () => {
     await form.discard();
     expect(form.getStatus()).toBe('idle');
   });
+
+  it('uses a shared lazily-created default client when config.client is omitted, so drafts persist across instances', async () => {
+    // No `client` in config — exercises `getDefaultClient()`'s lazy-create-then-memoize path.
+    // Reusing the same form id across two default-client instances (rather than just asserting no
+    // throw) proves the *same* underlying client/storage is reused, not a fresh one per form.
+    const form1 = createOfflineForm<{ name: string }>({
+      id: 'clinic-intake-default',
+      endpoint: '/api/patients',
+    });
+    await form1.save({ name: 'Amina' });
+    expect(form1.getStatus()).toBe('saved');
+
+    const form2 = createOfflineForm<{ name: string }>({
+      id: 'clinic-intake-default',
+      endpoint: '/api/patients',
+    });
+    await waitForCondition(() => form2.getStatus() === 'saved', {
+      message: `expected recovered draft status 'saved', got '${form2.getStatus()}'`,
+    });
+
+    await form1.discard();
+    form1.destroy();
+    form2.destroy();
+  });
+
+  it('a queued item failing with a retryable status stays "pending" (with the transient error attached) and still reaches success once the retry lands', async () => {
+    client = createLowdataClient({
+      namespace: uniqueNamespace(),
+      retry: { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 5, jitter: 'none' },
+    });
+    const form = createOfflineForm<{ name: string }>({
+      id: 'clinic-intake',
+      endpoint: '/api/patients',
+      client,
+    });
+
+    setOnline(false);
+    window.dispatchEvent(new Event('offline'));
+
+    let callCount = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        callCount++;
+        // 503 is in the retryable status set — the first sync attempt should fail but retry,
+        // not settle the form as 'failed'.
+        return new Response(null, { status: callCount === 1 ? 503 : 200 });
+      }),
+    );
+
+    const events: Array<{ status: string; error?: string }> = [];
+    form.subscribe((status, detail) => events.push({ status, error: detail?.error }));
+
+    const result = await form.submit({ name: 'Amina' });
+    expect(result.status).toBe('pending');
+
+    setOnline(true);
+    window.dispatchEvent(new Event('online'));
+
+    await waitForCondition(() => form.getStatus() === 'success', {
+      message: `expected form to reach 'success', last status was '${form.getStatus()}'`,
+    });
+    // This 'pending'-with-error is the item-failed/willRetry:true branch specifically — distinct
+    // from the plain 'pending' emitted the moment the form was first queued (no error attached).
+    expect(events).toContainEqual(
+      expect.objectContaining({ status: 'pending', error: expect.any(String) }),
+    );
+  });
+
+  it('a queued item failing with a non-retryable status reaches "failed" via the background sync path, not just the live-fetch path', async () => {
+    client = createLowdataClient({
+      namespace: uniqueNamespace(),
+      retry: { maxRetries: 2, baseDelayMs: 1, maxDelayMs: 5, jitter: 'none' },
+    });
+    const form = createOfflineForm<{ name: string }>({
+      id: 'clinic-intake',
+      endpoint: '/api/patients',
+      client,
+    });
+
+    setOnline(false);
+    window.dispatchEvent(new Event('offline'));
+
+    const result = await form.submit({ name: 'Amina' });
+    expect(result.status).toBe('pending');
+
+    // 500 is not in the retryable status set, so this should fail on the very first sync attempt
+    // regardless of maxRetries.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(null, { status: 500 })),
+    );
+    setOnline(true);
+    window.dispatchEvent(new Event('online'));
+
+    await waitForCondition(() => form.getStatus() === 'failed', {
+      message: `expected form to reach 'failed', last status was '${form.getStatus()}'`,
+    });
+  });
 });

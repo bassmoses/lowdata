@@ -201,4 +201,27 @@ describe('createResilientVideoLoader', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(listener).not.toHaveBeenCalled();
   });
+
+  it('destroy() is idempotent — a second call does not throw', () => {
+    // React 18 Strict Mode (and other frameworks' double-invoke dev checks) call an effect's
+    // cleanup, then its setup, then its cleanup again — a consumer could plausibly end up calling
+    // destroy() more than once on the same instance.
+    const loader = createResilientVideoLoader({ sources: SOURCES });
+    loader.destroy();
+    expect(() => loader.destroy()).not.toThrow();
+  });
+
+  it('reportPlayable() after destroy() is a no-op, not a throw', () => {
+    // Guards a real race: the consumer's <video> fires onCanPlay just as the component unmounts.
+    const loader = createResilientVideoLoader({ sources: SOURCES });
+    loader.destroy();
+    expect(() => loader.reportPlayable()).not.toThrow();
+  });
+
+  it('retry() after destroy() is a no-op, not a throw', () => {
+    // Guards a real race: the user taps "retry" just as the component unmounts.
+    const loader = createResilientVideoLoader({ sources: SOURCES });
+    loader.destroy();
+    expect(() => loader.retry()).not.toThrow();
+  });
 });

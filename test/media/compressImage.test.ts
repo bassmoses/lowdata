@@ -1,11 +1,39 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { compressImage } from '../../src/media/compressImage.js';
+import { MIN_QUALITY } from '../../src/media/compressionConstants.js';
 
 function stubImageSource(width: number, height: number): void {
   vi.stubGlobal(
     'createImageBitmap',
     vi.fn(async () => ({ width, height, close: () => {} })),
   );
+}
+
+/**
+ * Minimal `<img>` stand-in for the `loadImageSource()` fallback path (no `createImageBitmap`) —
+ * unlike `test/helpers/fakeImage.ts`'s `FakeImage`, this carries `width`/`height` so
+ * `computeTargetDimensions()` has something to work with.
+ */
+class FakeHtmlImage {
+  onload: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  width: number;
+  height: number;
+  private _src = '';
+
+  constructor(width: number, height: number) {
+    this.width = width;
+    this.height = height;
+  }
+
+  set src(value: string) {
+    this._src = value;
+    queueMicrotask(() => this.onload?.());
+  }
+
+  get src(): string {
+    return this._src;
+  }
 }
 
 describe('compressImage', () => {
@@ -83,5 +111,56 @@ describe('compressImage', () => {
     await compressImage(file);
 
     expect(createImageBitmapSpy).toHaveBeenCalledWith(file, { imageOrientation: 'from-image' });
+  });
+
+  it('falls back to loading via an <img> element when createImageBitmap is unavailable (e.g. older Safari)', async () => {
+    vi.stubGlobal('createImageBitmap', undefined);
+    vi.stubGlobal(
+      'Image',
+      class extends FakeHtmlImage {
+        constructor() {
+          super(1600, 800);
+        }
+      } as unknown as typeof Image,
+    );
+    // jsdom doesn't implement these; the fallback path needs them to build/release an object URL.
+    if (!('createObjectURL' in URL)) {
+      (URL as unknown as { createObjectURL: () => string }).createObjectURL = () => 'blob:fake';
+      (URL as unknown as { revokeObjectURL: () => void }).revokeObjectURL = () => {};
+    }
+    const file = new Blob(['fake'], { type: 'image/jpeg' });
+
+    const result = await compressImage(file, { maxWidth: 800 });
+
+    expect(result.width).toBe(800);
+    expect(result.height).toBe(400);
+  });
+
+  it('rejects instead of hanging when the canvas fails to produce a blob', async () => {
+    stubImageSource(800, 600);
+    const toBlobSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, 'toBlob')
+      .mockImplementation((callback: BlobCallback) => callback(null));
+    const file = new Blob(['fake'], { type: 'image/jpeg' });
+
+    await expect(compressImage(file)).rejects.toThrow(
+      'lowdata: canvas failed to produce an image blob',
+    );
+
+    toBlobSpy.mockRestore();
+  });
+
+  it('gives up gracefully (rather than looping forever or throwing) when targetSizeKB can never be reached, returning its best attempt', async () => {
+    stubImageSource(1000, 1000);
+    const file = new Blob(['fake'], { type: 'image/jpeg' });
+
+    // The fake toBlob() in test/setup/canvas.ts floors a blob at 100 bytes, so this budget is
+    // unreachable at any quality — the iterative search must still terminate (bounded by
+    // MAX_QUALITY_ITERATIONS) instead of spinning or rejecting.
+    const result = await compressImage(file, { quality: 0.9, targetSizeKB: 0.001 });
+
+    expect(result.quality).toBeGreaterThanOrEqual(MIN_QUALITY);
+    expect(result.quality).toBeLessThan(0.9);
+    expect(result.blob.size).toBeGreaterThan(0);
   });
 });

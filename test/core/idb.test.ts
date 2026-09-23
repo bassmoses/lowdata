@@ -1,6 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
+  _resetSharedDbForTests,
   createDbFallbackAccessor,
+  getSharedDb,
   idbClear,
   idbCount,
   idbDelete,
@@ -8,8 +10,18 @@ import {
   idbGetAll,
   idbPut,
   isIndexedDbAvailable,
+  LOWDATA_DB_NAME,
   openDatabase,
 } from '../../src/core/idb.js';
+
+function deleteDb(dbName: string): Promise<void> {
+  return new Promise((resolve) => {
+    const req = indexedDB.deleteDatabase(dbName);
+    req.onsuccess = () => resolve();
+    req.onerror = () => resolve();
+    req.onblocked = () => resolve();
+  });
+}
 
 describe('idb', () => {
   it('reports IndexedDB as available under the fake-indexeddb polyfill', () => {
@@ -63,6 +75,90 @@ describe('idb', () => {
     await expect(openDatabase('x', 1, [])).rejects.toThrow();
 
     globalThis.indexedDB = original;
+  });
+
+  it('rejects opening a database at a lower version than the one already stored (version conflict)', async () => {
+    const dbName = `test-db-verconflict-${Math.random()}`;
+    const db = await openDatabase(dbName, 2, [{ name: 'items', keyPath: 'id' }]);
+    db.close();
+
+    await expect(openDatabase(dbName, 1, [{ name: 'items', keyPath: 'id' }])).rejects.toThrow();
+
+    await deleteDb(dbName);
+  });
+
+  it('rejects opening a database that is blocked by another connection still open at an older version', async () => {
+    // Simulates a second tab opening the app with a newer schema version while the first tab's
+    // connection (still on the old version) hasn't closed yet.
+    const dbName = `test-db-blocked-${Math.random()}`;
+    const dbV1 = await openDatabase(dbName, 1, [{ name: 'items', keyPath: 'id' }]);
+
+    await expect(
+      openDatabase(dbName, 2, [{ name: 'items', keyPath: 'id' }]),
+    ).rejects.toThrow(/blocked/);
+
+    dbV1.close();
+    await deleteDb(dbName);
+  });
+
+  it('rejects idbPut when a unique index constraint is violated, aborting the transaction mid-write', async () => {
+    const dbName = `test-db-abort-${Math.random()}`;
+    const db = await openDatabase(dbName, 1, [
+      {
+        name: 'items',
+        keyPath: 'id',
+        indexes: [{ name: 'email', keyPath: 'email', unique: true }],
+      },
+    ]);
+    await idbPut(db, 'items', { id: '1', email: 'a@example.com' });
+
+    await expect(idbPut(db, 'items', { id: '2', email: 'a@example.com' })).rejects.toThrow();
+
+    // The aborted transaction must not have corrupted the record that was already committed.
+    expect(await idbGet(db, 'items', '1')).toEqual({ id: '1', email: 'a@example.com' });
+    expect(await idbGet(db, 'items', '2')).toBeUndefined();
+
+    db.close();
+    await deleteDb(dbName);
+  });
+});
+
+describe('getSharedDb / _resetSharedDbForTests', () => {
+  afterEach(async () => {
+    await _resetSharedDbForTests();
+    await deleteDb(LOWDATA_DB_NAME);
+  });
+
+  it('memoizes a single connection across repeated calls', async () => {
+    const first = await getSharedDb();
+    const second = await getSharedDb();
+    expect(first).toBe(second);
+  });
+
+  it('is a no-op when no shared connection has ever been opened', async () => {
+    await expect(_resetSharedDbForTests()).resolves.toBeUndefined();
+  });
+
+  it('closes the shared connection and clears the cache so a later call reopens a fresh one', async () => {
+    const first = await getSharedDb();
+    await _resetSharedDbForTests();
+
+    const second = await getSharedDb();
+    expect(second).not.toBe(first);
+    // The old connection was actually closed, not just forgotten about — a stale handle would
+    // throw synchronously on any further use.
+    expect(() => first.transaction('meta', 'readonly')).toThrow();
+  });
+
+  it('resets the cache on a failed open so a later call retries instead of replaying the rejection', async () => {
+    const original = globalThis.indexedDB;
+    // @ts-expect-error simulating IndexedDB going away mid-session
+    delete globalThis.indexedDB;
+
+    await expect(getSharedDb()).rejects.toThrow();
+
+    globalThis.indexedDB = original;
+    await expect(getSharedDb()).resolves.toBeDefined();
   });
 });
 

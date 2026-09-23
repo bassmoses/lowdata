@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LowdataRequestError } from '../../src/network/errors.js';
-import { attemptWithRetry, defaultRetryOn, isRetryableStatus } from '../../src/network/retry.js';
+import {
+  attemptWithRetry,
+  defaultRetryOn,
+  isRetryableStatus,
+  parseRetryAfterMs,
+} from '../../src/network/retry.js';
 
 const FAST_RETRY = { maxRetries: 5, baseDelayMs: 1, maxDelayMs: 5, jitter: 'none' as const };
 
@@ -113,6 +118,82 @@ describe('attemptWithRetry', () => {
       attemptWithRetry({ url: '/x', retryConfig: FAST_RETRY, shouldContinue: () => false }),
     ).rejects.toBeInstanceOf(LowdataRequestError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects immediately, without a LowdataRequestError, if the signal is already aborted by the time a retryable response is ready to sleep before its retry', async () => {
+    const controller = new AbortController();
+    let resolveFetch!: (response: Response) => void;
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          resolveFetch = resolve;
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const promise = attemptWithRetry({
+      url: '/x',
+      signal: controller.signal,
+      retryConfig: { ...FAST_RETRY, baseDelayMs: 50, maxDelayMs: 50 },
+    });
+
+    // Abort while the first attempt's fetch() is still pending, then let it resolve with a
+    // retryable status. By the time the retry loop reaches its backoff sleep(), the signal is
+    // already aborted — sleep() must reject synchronously instead of waiting out the delay.
+    controller.abort();
+    resolveFetch(jsonResponse(503));
+
+    await expect(promise).rejects.toBeDefined();
+    await expect(promise).rejects.not.toBeInstanceOf(LowdataRequestError);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // never got to a second attempt
+  });
+
+  it('stops backoff and rejects when the caller aborts mid-wait, during a retry backoff delay', async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn(async () => jsonResponse(503));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const promise = attemptWithRetry({
+      url: '/x',
+      signal: controller.signal,
+      retryConfig: { ...FAST_RETRY, baseDelayMs: 200, maxDelayMs: 200 },
+    });
+
+    // Let the first attempt fail and enter its backoff sleep, then abort well before the 200ms
+    // delay elapses — exercises sleep()'s 'abort' event listener, not its already-aborted check.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort();
+
+    await expect(promise).rejects.toBeDefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1); // aborted during backoff — never reached a retry
+  });
+});
+
+describe('parseRetryAfterMs', () => {
+  it('parses a Retry-After header expressed as an HTTP date into a millisecond delay', () => {
+    const response = new Response(null, {
+      headers: { 'Retry-After': new Date(Date.now() + 5000).toUTCString() },
+    });
+    const ms = parseRetryAfterMs(response);
+    expect(ms).toBeGreaterThan(3000);
+    expect(ms).toBeLessThanOrEqual(5000);
+  });
+
+  it('clamps a past HTTP-date Retry-After to 0 rather than a negative delay', () => {
+    const response = new Response(null, {
+      headers: { 'Retry-After': new Date(Date.now() - 5000).toUTCString() },
+    });
+    expect(parseRetryAfterMs(response)).toBe(0);
+  });
+
+  it('returns undefined for a Retry-After header that is neither a valid number nor a valid date', () => {
+    const response = new Response(null, { headers: { 'Retry-After': 'not-a-valid-value' } });
+    expect(parseRetryAfterMs(response)).toBeUndefined();
+  });
+
+  it('returns undefined when there is no Retry-After header at all', () => {
+    const response = new Response(null);
+    expect(parseRetryAfterMs(response)).toBeUndefined();
   });
 });
 

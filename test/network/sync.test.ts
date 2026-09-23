@@ -210,6 +210,81 @@ describe('SyncManager', () => {
     }
   });
 
+  it('captures the raw text body for a non-JSON, under-the-cap response', async () => {
+    const { queue, sync, events } = setup(`sync-test-capture-text-plain-${Math.random()}`, undefined, {
+      captureResponseBody: true,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response('plain text ok', {
+            status: 200,
+            headers: { 'content-type': 'text/plain' },
+          }),
+      ),
+    );
+
+    await queue.add(makeItem());
+    await sync.drain();
+
+    const successEvent = events.find((e) => e.type === 'item-success');
+    expect(successEvent?.type === 'item-success' && successEvent.response).toEqual({
+      status: 200,
+      body: 'plain text ok',
+    });
+    sync.destroy();
+  });
+
+  it('falls back to the raw text body when a "json" content-type response is not actually valid JSON', async () => {
+    const { queue, sync, events } = setup(`sync-test-capture-bad-json-${Math.random()}`, undefined, {
+      captureResponseBody: true,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response('not actually json', {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    );
+
+    await queue.add(makeItem());
+    await sync.drain();
+
+    const successEvent = events.find((e) => e.type === 'item-success');
+    expect(successEvent?.type === 'item-success' && successEvent.response).toEqual({
+      status: 200,
+      body: 'not actually json',
+    });
+    sync.destroy();
+  });
+
+  it('captures just the status, without throwing, when reading the response body itself fails', async () => {
+    const { queue, sync, events } = setup(
+      `sync-test-capture-body-read-fails-${Math.random()}`,
+      undefined,
+      { captureResponseBody: true },
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const response = new Response('irrelevant', { status: 200 });
+        vi.spyOn(response, 'text').mockRejectedValue(new Error('stream errored'));
+        return response;
+      }),
+    );
+
+    await queue.add(makeItem());
+    await expect(sync.drain()).resolves.toBeUndefined();
+
+    const successEvent = events.find((e) => e.type === 'item-success');
+    expect(successEvent?.type === 'item-success' && successEvent.response).toEqual({ status: 200 });
+    sync.destroy();
+  });
+
   it("attaches the item's idempotencyKey as an Idempotency-Key header when sending", async () => {
     const { queue, sync } = setup(`sync-test-idem-${Math.random()}`);
     const sentHeaders: Array<Record<string, string> | undefined> = [];

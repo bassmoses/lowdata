@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { createResilientVideo } from '../../src/solid/createResilientVideo.js';
 import type { VideoSource } from '../../src/media/resilientVideo.js';
 
-const SOURCES: VideoSource[] = [{ src: '/a.mp4' }, { src: '/b.mp4' }];
+const SOURCE_A: VideoSource = { src: '/a.mp4' };
+const SOURCES: VideoSource[] = [SOURCE_A, { src: '/b.mp4' }];
 
 describe('createResilientVideo (solid)', () => {
   it('arms the first source immediately, and reportPlayable() flows through to the signal', () => {
@@ -17,6 +18,22 @@ describe('createResilientVideo (solid)', () => {
 
     video.reportPlayable();
     expect(video.state().status).toBe('playable');
+
+    dispose();
+  });
+
+  it('reportError() and retry() flow through to the signal', () => {
+    let dispose!: () => void;
+    const video = createRoot((d) => {
+      dispose = d;
+      return createResilientVideo({ sources: [SOURCE_A] });
+    });
+
+    video.reportError('error');
+    expect(video.state().status).toBe('exhausted');
+
+    video.retry();
+    expect(video.state().status).toBe('loading');
 
     dispose();
   });

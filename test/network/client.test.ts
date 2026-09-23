@@ -425,4 +425,115 @@ describe('LowdataClient', () => {
     expect(isQueued(result)).toBe(false);
     expect((result as Response).status).toBe(200);
   });
+
+  it('normalizes a Headers instance and an array-of-tuples HeadersInit the same as a plain object', async () => {
+    const sentHeaders: Array<Record<string, string> | undefined> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        sentHeaders.push(init?.headers as Record<string, string> | undefined);
+        return new Response(null, { status: 200 });
+      }),
+    );
+    client = createLowdataClient({ namespace: uniqueNamespace() });
+
+    await client.fetch('/api/x', { headers: new Headers({ 'X-From-Headers': 'a' }) });
+    await client.fetch('/api/x', { headers: [['X-From-Array', 'b']] });
+
+    // The Headers class itself lowercases header names — that's native Headers behavior, not
+    // normalizeHeaders(), so assert against the lowercased form it actually produces.
+    expect(sentHeaders[0]?.['x-from-headers']).toBe('a');
+    expect(sentHeaders[1]?.['X-From-Array']).toBe('b');
+  });
+
+  it('records a circuit-breaker failure for a live response that resolves but is not ok (e.g. a non-retryable 400)', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 400 }));
+    vi.stubGlobal('fetch', fetchMock);
+    client = createLowdataClient({
+      namespace: uniqueNamespace(),
+      circuitBreaker: { threshold: 1, cooldownMs: 60_000 },
+      retry: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1, jitter: 'none' },
+    });
+
+    // A 400 isn't retried and isn't thrown — attemptWithRetry hands the Response straight back.
+    const result = await client.fetch('/api/orders', { method: 'POST', body: '{}' });
+    expect(isQueued(result)).toBe(false);
+    expect((result as Response).status).toBe(400);
+
+    // But it still counts as a breaker failure for this origin (threshold: 1): the next mutating
+    // request against it is skipped live entirely and queued instead.
+    const second = await client.fetch('/api/orders', { method: 'POST', body: '{}' });
+    expect(isQueued(second)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // second call never attempted live
+  });
+
+  it('rethrows a failed live GET directly, without queuing (GETs are not queueable by default)', async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError('network down');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    client = createLowdataClient({
+      namespace: uniqueNamespace(),
+      retry: { maxRetries: 0, baseDelayMs: 1, maxDelayMs: 1, jitter: 'none' },
+    });
+
+    await expect(client.fetch('/api/report')).rejects.toThrow();
+    expect(await client.queue.list()).toHaveLength(0);
+  });
+
+  it('throws a TypeError instead of silently dropping data when a request body cannot be durably queued', async () => {
+    client = createLowdataClient({ namespace: uniqueNamespace() });
+    setOnline(false);
+    window.dispatchEvent(new Event('offline'));
+
+    // Only string/Blob bodies survive a round trip through IndexedDB — an ArrayBuffer (or any
+    // other BodyInit shape) must fail loudly here rather than being queued and later sent empty.
+    await expect(
+      client.fetch('/api/orders', { method: 'POST', body: new ArrayBuffer(4) }),
+    ).rejects.toThrow(TypeError);
+  });
+
+  it('joins a relative path with a configured baseUrl, but leaves an absolute URL untouched', async () => {
+    const requestedUrls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        requestedUrls.push(url);
+        return new Response(null, { status: 200 });
+      }),
+    );
+    client = createLowdataClient({
+      namespace: uniqueNamespace(),
+      baseUrl: 'https://api.example.com/v1/',
+    });
+
+    await client.fetch('/orders');
+    await client.fetch('orders/123');
+    await client.fetch('https://other.example.com/direct');
+
+    expect(requestedUrls).toEqual([
+      'https://api.example.com/v1/orders',
+      'https://api.example.com/v1/orders/123',
+      'https://other.example.com/direct', // absolute URL — baseUrl not prepended
+    ]);
+  });
+
+  it('queue.retry() does nothing for an item that is not in a terminal failed/expired/cancelled state', async () => {
+    client = createLowdataClient({ namespace: uniqueNamespace() });
+    const item = await client.queue.add({
+      url: '/api/x',
+      method: 'POST',
+      priority: 'normal',
+      body: '{}',
+    });
+    // Freshly added, still 'pending' — retry() only makes sense from a terminal, non-successful state.
+    expect(item.status).toBe('pending');
+
+    await client.queue.retry(item.id);
+
+    const current = (await client.queue.list()).find((i) => i.id === item.id);
+    expect(current?.status).toBe('pending');
+    expect(current?.attempts).toBe(0);
+    expect(current?.updatedAt).toBe(item.updatedAt); // untouched, not merely re-written to the same values
+  });
 });
