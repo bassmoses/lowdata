@@ -8,3 +8,12 @@ export type {
   ProgressiveImageLoaderOptions,
   ProgressiveImageState,
 } from './progressiveImage.js';
+export { createResilientVideoLoader } from './resilientVideo.js';
+export type {
+  ResilientVideoLoader,
+  ResilientVideoLoaderOptions,
+  ResilientVideoState,
+  ResilientVideoStatus,
+  VideoSource,
+} from './resilientVideo.js';
+export { pickInitialSourceIndex } from './videoQualityPolicy.js';

@@ -43,7 +43,7 @@ a retry policy, a canvas-based image resizer. Across a review of the closest com
 a few specific things aren't:
 
 - **Bandwidth-aware media compression.** `compressImage()` ties JPEG quality, max dimensions, and
-  target file size directly to *live* connection quality (`online`/`slow`/`offline`) via
+  target file size directly to _live_ connection quality (`online`/`slow`/`offline`) via
   `presetForQuality()` — not a fixed setting you configure once. A photo compressed while offline
   comes out smaller than one compressed on a fast connection, because it's headed into the
   persistent queue, where every extra KB costs storage quota now and mobile data later.
@@ -52,7 +52,7 @@ a few specific things aren't:
   failing) against a host already known to be down.
 - **`resolveHeaders` — auth refreshed before every retry, not just at enqueue time.** A bearer token
   captured when a request was first queued can expire during a long offline stretch;
-  `resolveHeaders` runs fresh immediately before *every* send attempt, including a retry firing
+  `resolveHeaders` runs fresh immediately before _every_ send attempt, including a retry firing
   hours later, so a stale token doesn't turn into a queue that 401s forever.
 - **`Retry-After` handling built in.** `429`/`503` responses carrying a `Retry-After` header are
   honored automatically as part of the retry/backoff calculation, not left for you to parse and
@@ -320,7 +320,7 @@ responses are returned to you immediately, unretried, so you can handle validati
 queue) and projects the queue's sync events into a simple status: `idle → saved → pending → syncing
 → success`, with `failed`/`retry()` on the unhappy path.
 
-### Media compression & progressive images
+### Media: compression, progressive images & resilient video
 
 ```ts
 import { compressImage, createProgressiveImageLoader } from 'lowdata/media';
@@ -329,19 +329,45 @@ const loader = createProgressiveImageLoader({ src: fullImageUrl, placeholder: ti
 loader.subscribe(({ src, isLoaded }) => setImgSrc(src));
 ```
 
+`createResilientVideoLoader` plays video from a caller-supplied, connection-aware list of fallback
+sources (different CDN mirrors or bitrate renditions of the same video) — it picks a sensible
+starting source for the current connection quality, falls back through the rest on error or stall,
+and settles on a poster image once every source has failed, auto-retrying once on reconnect:
+
+```ts
+import { createResilientVideoLoader } from 'lowdata/media';
+
+const video = createResilientVideoLoader({
+  sources: [
+    { src: cdnA1080, quality: 'online', label: '1080p' },
+    { src: cdnA480, quality: 'slow', label: '480p' },
+  ],
+  poster: posterUrl,
+  posterPlaceholder: tinyBlurDataUrl,
+});
+
+video.subscribe((state) => render(state));
+// Wire your own <video> element's onCanPlay/onLoadedData to video.reportPlayable(), and its
+// onError/onStalled to video.reportError() — the loader never owns the element itself.
+```
+
+This is multi-source fallback plus poster-only degradation, not offline video playback — there's no
+byte-level video caching in the offline queue; once every source and the poster are unreachable,
+there's nothing left to show.
+
 ## API reference
 
-| Subpath           | Exports                                                                                                                                                                                                                                   |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Subpath           | Exports                                                                                                                                                                                                                                                                |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `lowdata`         | `createLowdataClient`, `LowdataClient`, `isQueued`, `LowdataRequestError`, `createOfflineForm`, `getConnectionQuality`, `onConnectionChange`, `createIndexedDbStorageAdapter`, `createMemoryStorageAdapter`, `createLocalStorageAdapter`, `CircuitBreaker`, core types |
-| `lowdata/network` | Everything in the root, plus `RequestQueue`, `SyncManager`, `ConnectionMonitor`, `defaultRetryOn`, `defaultBreakerKey`, `createQueueBroadcast`                                                                                            |
-| `lowdata/forms`   | `createOfflineForm`, form types                                                                                                                                                                                                           |
-| `lowdata/media`   | `compressImage`, `createProgressiveImageLoader`, `presetForQuality`                                                                                                                                                                       |
-| `lowdata/react`   | `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`, `useProgressiveImage`                                                                                                                                                        |
-| `lowdata/vue`     | `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`, `useProgressiveImage` (Composition API)                                                                                                                                      |
-| `lowdata/svelte`  | `connectionStatus`, `createOfflineFormStore`, `createProgressiveImageStore`, `createLowdataClient` (stores; zero dependency on `svelte`)                                                                                                  |
-| `lowdata/angular` | `connectionStatus$`, `onSync$`, `offlineFormStatus$`, `progressiveImageState$`, `createLowdataClient`, `createOfflineForm` (RxJS Observables)                                                                                             |
-| `lowdata/solid`   | `createConnectionStatus`, `createLowdataClient`, `createOfflineForm`, `createProgressiveImage` (Solid primitives)                                                                                                                         |
+| `lowdata/network` | Everything in the root, plus `RequestQueue`, `SyncManager`, `ConnectionMonitor`, `defaultRetryOn`, `defaultBreakerKey`, `createQueueBroadcast`                                                                                                                         |
+| `lowdata/forms`   | `createOfflineForm`, form types                                                                                                                                                                                                                                        |
+| `lowdata/media`   | `compressImage`, `createProgressiveImageLoader`, `presetForQuality`, `createResilientVideoLoader`, `pickInitialSourceIndex`                                                                                                                                            |
+| `lowdata/react`   | `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`, `useProgressiveImage`, `useResilientVideo`                                                                                                                                                                |
+| `lowdata/vue`     | `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`, `useProgressiveImage`, `useResilientVideo` (Composition API)                                                                                                                                              |
+| `lowdata/svelte`  | `connectionStatus`, `createOfflineFormStore`, `createProgressiveImageStore`, `createResilientVideoStore`, `createLowdataClient` (stores; zero dependency on `svelte`)                                                                                                  |
+| `lowdata/angular` | `connectionStatus$`, `onSync$`, `offlineFormStatus$`, `progressiveImageState$`, `resilientVideoState$`, `createLowdataClient`, `createOfflineForm`, `createResilientVideoLoader` (RxJS Observables)                                                                    |
+| `lowdata/solid`   | `createConnectionStatus`, `createLowdataClient`, `createOfflineForm`, `createProgressiveImage`, `createResilientVideo` (Solid primitives)                                                                                                                              |
 
 Full type signatures are in each subpath's shipped `.d.ts` — every export is documented with TSDoc.
 
@@ -381,11 +407,12 @@ from `lowdata` directly).
   directly — no framework glue needed, nothing here assumes a specific framework exists.
 
 - **React** (`lowdata/react`): `useConnectionStatus`, `useLowdataClient`, `useOfflineForm`,
-  `useProgressiveImage` — plus a re-export of the raw `createLowdataClient`/`LowdataClient` for
-  code that needs a client outside a component's lifecycle (a Redux/Zustand store, a module-level
-  singleton). `react` is an optional peer dependency (`>=17`).
+  `useProgressiveImage`, `useResilientVideo` — plus a re-export of the raw
+  `createLowdataClient`/`LowdataClient` for code that needs a client outside a component's
+  lifecycle (a Redux/Zustand store, a module-level singleton). `react` is an optional peer
+  dependency (`>=17`).
 
-- **Vue** (`lowdata/vue`): the same four composables (Composition-API-native — `Ref`s, cleaned up
+- **Vue** (`lowdata/vue`): the same five composables (Composition-API-native — `Ref`s, cleaned up
   via `onScopeDispose` — so they work from a bare `effectScope()`, not just inside a component's
   `setup()`) plus the same raw `createLowdataClient`/`LowdataClient` re-export as React, for a
   Pinia store or other non-component usage. `vue` is an optional peer dependency (`>=3`).
@@ -399,7 +426,7 @@ from `lowdata` directly).
   ```
 
 - **Svelte** (`lowdata/svelte`): stores, not hooks — `connectionStatus()`, `createOfflineFormStore`,
-  `createProgressiveImageStore` all return an object satisfying Svelte's store contract
+  `createProgressiveImageStore`, `createResilientVideoStore` all return an object satisfying Svelte's store contract
   (`.subscribe(run): unsubscribe`). This subpath needs **no dependency on `svelte` itself** — the
   contract is structural, so `$`-auto-subscription works regardless.
 
@@ -413,11 +440,15 @@ from `lowdata` directly).
   ```
 
 - **Angular** (`lowdata/angular`): RxJS Observables — `connectionStatus$()`, `onSync$(client)`,
-  `offlineFormStatus$(form)`, `progressiveImageState$()` — each multicast via `shareReplay` so
-  several template `| async` bindings share one underlying listener. No `@angular/core` import, no
-  decorators, so there's no Angular-major-version coupling; wrap in your own `@Injectable()`
-  service as needed. `rxjs` is an optional peer dependency (`>=7`, already present in virtually
-  every Angular app).
+  `offlineFormStatus$(form)`, `progressiveImageState$()`, `resilientVideoState$(loader)` — each
+  multicast via `shareReplay` so several template `| async` bindings share one underlying listener.
+  Unlike `progressiveImageState$()`, `resilientVideoState$` takes an **already-created**
+  `ResilientVideoLoader` (build one with `createResilientVideoLoader`, re-exported from this
+  subpath alongside `createOfflineForm`) — you own it, and must call `loader.destroy()` yourself
+  (e.g. in `ngOnDestroy`) since unsubscribing from the Observable alone doesn't. No `@angular/core`
+  import, no decorators, so there's no Angular-major-version coupling; wrap in your own
+  `@Injectable()` service as needed. `rxjs` is an optional peer dependency (`>=7`, already present
+  in virtually every Angular app).
 
   ```ts
   import { connectionStatus$ } from 'lowdata/angular';
@@ -426,8 +457,9 @@ from `lowdata` directly).
   ```
 
 - **Solid** (`lowdata/solid`): primitives following Solid's own `createX` convention —
-  `createConnectionStatus`, `createLowdataClient`, `createOfflineForm`, `createProgressiveImage` —
-  cleaned up via `onCleanup`, so they work inside any reactive root, not just a component.
+  `createConnectionStatus`, `createLowdataClient`, `createOfflineForm`, `createProgressiveImage`,
+  `createResilientVideo` — cleaned up via `onCleanup`, so they work inside any reactive root, not
+  just a component.
   `solid-js` is an optional peer dependency (`>=1`).
   ```ts
   import { createConnectionStatus } from 'lowdata/solid';
@@ -501,9 +533,11 @@ every extension point needed to run there is already exposed:
     if (state === 'active') void client.sync();
   });
   ```
-- `lowdata/media` (Canvas-based image compression) is browser-only and has no fallback — don't
-  import it from React Native or Node; it's a separate subpath specifically so you never pay for it
-  there.
+- `lowdata/media` is browser-only — `compressImage` needs Canvas/OffscreenCanvas with no fallback,
+  and `createResilientVideoLoader`/`createProgressiveImageLoader`, while SSR-safe to _import_ (both
+  guard on `typeof Image !== 'undefined'`), still assume a real `<video>`/`<img>` DOM element to be
+  useful. Don't import this subpath from React Native or Node; it's separate specifically so you
+  never pay for it there.
 
 ## Browser & runtime support
 
@@ -528,6 +562,10 @@ every extension point needed to run there is already exposed:
   divergent writes — pair its idempotency keys with your own server-side conflict policy.
 - **Live cross-tab queue state, storage-quota warnings, and a per-endpoint circuit breaker are all
   implemented** — see `queue.subscribe()`, the `'quota'` error scope, and `circuitBreaker` above.
+- **Resilient video is multi-source fallback + poster-only degradation, not offline video
+  playback.** There's no byte-level video caching/persistence in the offline queue — once every
+  source in `createResilientVideoLoader`'s `sources[]` and the poster are unreachable, there's
+  nothing left to show.
 
 See [`ROADMAP.md`](./ROADMAP.md) for what's still deliberately deferred and why.
 
@@ -537,12 +575,12 @@ Sizes below are the unminified ESM build's gzip size — real-world minified siz
 bundler) will be smaller. Each subpath is independently tree-shakeable; you only pay for what you
 import.
 
-| Subpath                                                  | gzip (unminified) |
-| -------------------------------------------------------- | ----------------- |
-| `lowdata` (core + network + forms)                       | ~18.4 KB          |
-| `lowdata/network` alone                                  | ~17.3 KB          |
-| `lowdata/media` alone                                    | ~3.9 KB           |
-| `lowdata/react` / `vue` / `svelte` / `angular` / `solid` | ~17.4-17.9 KB each |
+| Subpath                                                  | gzip (unminified)  |
+| -------------------------------------------------------- | ------------------ |
+| `lowdata` (core + network + forms)                       | ~18.5 KB           |
+| `lowdata/network` alone                                  | ~17.4 KB           |
+| `lowdata/media` alone                                    | ~5.2 KB            |
+| `lowdata/react` / `vue` / `svelte` / `angular` / `solid` | ~18.3-18.5 KB each |
 
 Includes `createLocalStorageAdapter` and the Worker/OffscreenCanvas image-compression path — both
 additive, neither adds a dependency. The worker itself is a small inline string, not a separate

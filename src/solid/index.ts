@@ -5,3 +5,5 @@ export { createLowdataClient } from './createLowdataClient.js';
 export { createOfflineForm } from './createOfflineForm.js';
 export type { SolidOfflineForm } from './createOfflineForm.js';
 export { createProgressiveImage } from './createProgressiveImage.js';
+export { createResilientVideo } from './createResilientVideo.js';
+export type { SolidResilientVideo } from './createResilientVideo.js';

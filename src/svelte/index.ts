@@ -8,4 +8,6 @@ export { createOfflineFormStore } from './offlineFormStore.js';
 export type { OfflineFormStore } from './offlineFormStore.js';
 export { createProgressiveImageStore } from './progressiveImageStore.js';
 export type { ProgressiveImageStore } from './progressiveImageStore.js';
+export { createResilientVideoStore } from './resilientVideoStore.js';
+export type { ResilientVideoStore } from './resilientVideoStore.js';
 export type { SvelteReadable } from './types.js';

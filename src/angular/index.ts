@@ -5,7 +5,16 @@ export { createLowdataClient, LowdataClient } from '../network/client.js';
 export type { LowdataClientConfig } from '../network/types.js';
 export { createOfflineForm } from '../forms/offlineForm.js';
 export type { OfflineForm } from '../forms/offlineForm.js';
+export { createResilientVideoLoader } from '../media/resilientVideo.js';
+export type {
+  ResilientVideoLoader,
+  ResilientVideoLoaderOptions,
+  ResilientVideoState,
+  ResilientVideoStatus,
+  VideoSource,
+} from '../media/resilientVideo.js';
 export { connectionStatus$ } from './connectionStatus.js';
 export { onSync$ } from './onSync.js';
 export { offlineFormStatus$ } from './offlineFormStatus.js';
 export { progressiveImageState$ } from './progressiveImageState.js';
+export { resilientVideoState$ } from './resilientVideoState.js';
