@@ -1,6 +1,6 @@
 {
   "name": "lowdata",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Resilience for the other half of the internet: automatic retries, an offline request queue, and bandwidth-aware media for web apps on poor connections.",
   "keywords": [
     "offline",
